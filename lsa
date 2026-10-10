@@ -13,6 +13,7 @@ source "$ROOT_DIR/modules/host.sh"
 source "$ROOT_DIR/modules/users.sh"
 source "$ROOT_DIR/modules/sudo.sh"
 source "$ROOT_DIR/modules/permissions.sh"
+source "$ROOT_DIR/modules/ssh.sh"
 
 show_version() {
 printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
@@ -73,7 +74,16 @@ main() {
       target_home="$(get_target_home)"
       check_ssh_directory_permissions "$target_home"
       check_authorized_keys_permissions "$target_home"
-      ;; 
+      ;;
+    ssh)
+      check_sshd_available
+      check_root_login
+      check_password_authentication
+      check_empty_passwords
+      check_pubkey_authentication
+      check_max_auth_tries
+      check_x11_forwarding
+      ;;
     *)
       show_banner
       ;;
