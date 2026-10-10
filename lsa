@@ -12,6 +12,7 @@ source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/modules/host.sh"
 source "$ROOT_DIR/modules/users.sh"
 source "$ROOT_DIR/modules/sudo.sh"
+source "$ROOT_DIR/modules/permissions.sh"
 
 show_version() {
 printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
@@ -62,6 +63,17 @@ main() {
       check_nopasswd_rules
       check_broad_sudo_rules
       ;;
+    permissions)
+      check_file_permissions /etc/passwd 644 root root
+      check_shadow_permissions /etc/shadow
+      check_file_permissions /etc/group 644 root root
+      check_shadow_permissions /etc/gshadow
+      check_file_permissions /etc/sudoers 440 root root
+
+      target_home="$(get_target_home)"
+      check_ssh_directory_permissions "$target_home"
+      check_authorized_keys_permissions "$target_home"
+      ;; 
     *)
       show_banner
       ;;
