@@ -11,6 +11,7 @@ source "$ROOT_DIR/lib/logger.sh"
 source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/modules/host.sh"
 source "$ROOT_DIR/modules/users.sh"
+source "$ROOT_DIR/modules/sudo.sh"
 
 show_version() {
 printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
@@ -53,6 +54,13 @@ main() {
       audit_admin_users
       audit_empty_password_users
       audit_locked_users
+      ;;
+    sudo)
+      check_sudoers_syntax
+      check_sudoers_permissions
+      check_sudoers_d_permissions
+      check_nopasswd_rules
+      check_broad_sudo_rules
       ;;
     *)
       show_banner
