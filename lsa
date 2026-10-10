@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+readonly LSA_VERSION="0.1.0"
+
+readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+source "$ROOT_DIR/lib/core.sh"
+source "$ROOT_DIR/lib/logger.sh"
+source "$ROOT_DIR/lib/utils.sh"
+source "$ROOT_DIR/modules/host.sh"
+source "$ROOT_DIR/modules/users.sh"
+
+show_version() {
+printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
+}
+
+show_help() {
+    printf '%s\n' 'Linux Security Auditor'
+    printf '\n'
+    printf '%s\n' 'Usage:'
+    printf '%s\n' '  ./lsa [option]'
+    printf '\n'
+    printf '%s\n' 'Options:'
+    printf '%s\n' '  -h, --help      Show this help message'
+    print '%s\n'  '  -v, --version   Show version'
+}
+
+
+
+main() {
+  case "${1:-}" in
+    -h|--help)
+      show_help
+      ;;
+    -v|--version)
+      show_version
+      ;;
+    host)
+      printf 'Hostname: %s\n' "$(get_hostname)"
+      printf 'Kernel: %s\n' "$(get_kernel)"
+      printf 'Architecture: %s\n' "$(get_architecture)"
+      printf 'OS: %s\n' "$(get_os_name)"
+      printf 'Version: %s\n' "$(get_os_version)"
+      printf 'Init: %s\n' "$(get_init_system)"
+      printf 'Package Manager: %s\n' "$(get_package_manager)"
+      printf 'Uptime: %s\n' "$(get_uptime)"
+      ;;
+    users)
+      audit_uid_zero_users
+      audit_interactive_users
+      audit_admin_users
+      audit_empty_password_users
+      audit_locked_users
+      ;;
+    *)
+      show_banner
+      ;;
+    esac
+}
+main "$@"
