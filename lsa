@@ -18,6 +18,7 @@ source "$ROOT_DIR/modules/ports.sh"
 source "$ROOT_DIR/modules/firewall.sh"
 source "$ROOT_DIR/modules/processes.sh"
 source "$ROOT_DIR/modules/updates.sh"
+source "$ROOT_DIR/parsers/journal.sh"
 
 show_version() {
 printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
@@ -107,6 +108,9 @@ main() {
     updates)
       check_pending_updates
       check_security_updates
+      ;;
+    journal)
+      read_auth_journal
       ;;
     *)
       show_banner
