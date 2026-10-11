@@ -16,6 +16,7 @@ source "$ROOT_DIR/modules/permissions.sh"
 source "$ROOT_DIR/modules/ssh.sh"
 source "$ROOT_DIR/modules/ports.sh"
 source "$ROOT_DIR/modules/firewall.sh"
+source "$ROOT_DIR/modules/processes.sh"
 
 show_version() {
 printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
@@ -96,6 +97,11 @@ main() {
       check_active_zones
       check_active_zone_rules
       check_broad_port_ranges
+      ;;
+    processes)
+      summarize_root_processes
+      check_root_process_executables
+      check_root_process_executable_locations
       ;;
     *)
       show_banner
