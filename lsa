@@ -19,6 +19,7 @@ source "$ROOT_DIR/modules/firewall.sh"
 source "$ROOT_DIR/modules/processes.sh"
 source "$ROOT_DIR/modules/updates.sh"
 source "$ROOT_DIR/parsers/journal.sh"
+source "$ROOT_DIR/parsers/ssh_auth.sh"
 
 show_version() {
 printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
@@ -111,6 +112,9 @@ main() {
       ;;
     journal)
       read_auth_journal
+      ;;
+    sshlog)
+      parse_ssh_auth_events
       ;;
     *)
       show_banner
