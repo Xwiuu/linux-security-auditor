@@ -14,6 +14,7 @@ source "$ROOT_DIR/modules/users.sh"
 source "$ROOT_DIR/modules/sudo.sh"
 source "$ROOT_DIR/modules/permissions.sh"
 source "$ROOT_DIR/modules/ssh.sh"
+source "$ROOT_DIR/modules/ports.sh"
 
 show_version() {
 printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
@@ -83,6 +84,10 @@ main() {
       check_pubkey_authentication
       check_max_auth_tries
       check_x11_forwarding
+      ;;
+    ports)
+      summarize_listening_ports
+      list_exposed_tcp_ports
       ;;
     *)
       show_banner
