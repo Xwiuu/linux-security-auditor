@@ -15,6 +15,7 @@ source "$ROOT_DIR/modules/sudo.sh"
 source "$ROOT_DIR/modules/permissions.sh"
 source "$ROOT_DIR/modules/ssh.sh"
 source "$ROOT_DIR/modules/ports.sh"
+source "$ROOT_DIR/modules/firewall.sh"
 
 show_version() {
 printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
@@ -88,6 +89,13 @@ main() {
     ports)
       summarize_listening_ports
       list_exposed_tcp_ports
+      ;;
+    firewall)
+      detect_firewall_backend
+      check_firewalld_status
+      check_active_zones
+      check_active_zone_rules
+      check_broad_port_ranges
       ;;
     *)
       show_banner
