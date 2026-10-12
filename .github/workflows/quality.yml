@@ -19,9 +19,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install ShellCheck and shfmt
+        env:
+          SHELLCHECK_VERSION: 0.11.0
+          SHFMT_VERSION: 3.14.1
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck shfmt
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" |
+            tar -xJ
+          sudo install -m 755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          curl -fsSL "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64" -o shfmt
+          sudo install -m 755 shfmt /usr/local/bin/shfmt
+          shellcheck --version | head -2
+          shfmt --version
 
       - name: Run quality gate
         run: ./scripts/check.sh
