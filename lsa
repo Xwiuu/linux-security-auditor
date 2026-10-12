@@ -9,6 +9,8 @@ readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/lib/core.sh"
 source "$ROOT_DIR/lib/logger.sh"
 source "$ROOT_DIR/lib/utils.sh"
+source "$ROOT_DIR/lib/findings.sh"
+source "$ROOT_DIR/reporters/text.sh"
 source "$ROOT_DIR/modules/host.sh"
 source "$ROOT_DIR/modules/users.sh"
 source "$ROOT_DIR/modules/sudo.sh"
@@ -89,6 +91,7 @@ main() {
       check_pubkey_authentication
       check_max_auth_tries
       check_x11_forwarding
+      findings_summary
       ;;
     ports)
       summarize_listening_ports
