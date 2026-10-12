@@ -11,6 +11,8 @@ source "$ROOT_DIR/lib/logger.sh"
 source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/lib/findings.sh"
 source "$ROOT_DIR/reporters/text.sh"
+source "$ROOT_DIR/reporters/json.sh"
+source "$ROOT_DIR/reporters/csv.sh"
 source "$ROOT_DIR/modules/host.sh"
 source "$ROOT_DIR/modules/users.sh"
 source "$ROOT_DIR/modules/sudo.sh"
@@ -35,7 +37,147 @@ show_help() {
     printf '\n'
     printf '%s\n' 'Options:'
     printf '%s\n' '  -h, --help      Show this help message'
-    print '%s\n'  '  -v, --version   Show version'
+    printf '%s\n' '  -v, --version   Show version'
+    printf '\n'
+    printf '%s\n' 'Commands:'
+    printf '%s\n' '  audit                     Run the complete security audit'
+    printf '%s\n' '  audit --format text       Render findings as text'
+    printf '%s\n' '  audit --format json       Render findings as JSON'
+    printf '%s\n' '  audit --format csv        Render findings as CSV'
+    printf '%s\n' '  audit --output FILE       Write the report to FILE'
+    printf '\n'
+    printf '%s\n' 'Examples:'
+    printf '%s\n' '  ./lsa audit --format json --output reports/audit.json'
+}
+
+
+run_audit() {
+  local target_home
+
+  finding_reset
+
+  # Users
+  audit_uid_zero_users
+  audit_interactive_users
+  audit_admin_users
+  audit_empty_password_users
+  audit_locked_users
+
+  # Sudo
+  check_sudoers_syntax
+  check_sudoers_permissions
+  check_sudoers_d_permissions
+  check_nopasswd_rules
+  check_broad_sudo_rules
+
+  # Critical permissions
+  check_file_permissions PERM-001 /etc/passwd 644 root root
+  check_shadow_permissions PERM-002 /etc/shadow
+  check_file_permissions PERM-003 /etc/group 644 root root
+  check_shadow_permissions PERM-004 /etc/gshadow
+  check_file_permissions PERM-005 /etc/sudoers 440 root root
+
+  target_home="$(get_target_home)"
+  check_ssh_directory_permissions "$target_home"
+  check_authorized_keys_permissions "$target_home"
+
+  # SSH
+  check_sshd_available
+  check_root_login
+  check_password_authentication
+  check_empty_passwords
+  check_pubkey_authentication
+  check_max_auth_tries
+  check_x11_forwarding
+}
+
+
+render_audit() {
+  local format="$1"
+
+  case "$format" in
+    text)
+      render_text_findings
+      ;;
+
+    json)
+      render_json_findings
+      ;;
+
+    csv)
+      render_csv_findings
+      ;;
+
+    *)
+      die "unsupported output format: $format"
+      ;;
+  esac
+}
+
+
+run_audit_command() {
+  local format="text"
+  local output_file=""
+
+  while (( $# > 0 )); do
+    case "$1" in
+      --format)
+        if (( $# < 2 )); then
+          die "--format requires a value"
+        fi
+
+        format="$2"
+        shift 2
+        ;;
+
+      --output)
+        if (( $# < 2 )); then
+          die "--output requires a file path"
+        fi
+
+        output_file="$2"
+        shift 2
+        ;;
+
+      *)
+        die "unknown audit option: $1"
+        ;;
+    esac
+  done
+
+  case "$format" in
+    text|json|csv)
+      ;;
+    *)
+      die "unsupported output format: $format"
+      ;;
+  esac
+
+  run_audit
+
+  if [[ -z "$output_file" ]]; then
+    render_audit "$format"
+    return 0
+  fi
+
+  local output_dir
+  output_dir="$(dirname "$output_file")"
+
+  if [[ ! -d "$output_dir" ]]; then
+    die "output directory does not exist: $output_dir"
+  fi
+
+  case "$format" in
+    text)
+      write_text_report "$output_file"
+      ;;
+    json)
+      write_json_report "$output_file"
+      ;;
+    csv)
+      write_csv_report "$output_file"
+      ;;
+  esac
 }
 
 
@@ -47,6 +189,10 @@ main() {
       ;;
     -v|--version)
       show_version
+      ;;
+    audit)
+      shift
+      run_audit_command "$@"
       ;;
     host)
       printf 'Hostname: %s\n' "$(get_hostname)"
