@@ -24,6 +24,7 @@ source "$ROOT_DIR/modules/processes.sh"
 source "$ROOT_DIR/modules/updates.sh"
 source "$ROOT_DIR/parsers/journal.sh"
 source "$ROOT_DIR/parsers/ssh_auth.sh"
+source "$ROOT_DIR/tui/main.sh"
 
 show_version() {
 printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
@@ -45,6 +46,7 @@ show_help() {
     printf '%s\n' '  audit --format json       Render findings as JSON'
     printf '%s\n' '  audit --format csv        Render findings as CSV'
     printf '%s\n' '  audit --output FILE       Write the report to FILE'
+    printf '%s\n' '  tui                       Start interactive terminal interface'
     printf '\n'
     printf '%s\n' 'Examples:'
     printf '%s\n' '  ./lsa audit --format json --output reports/audit.json'
@@ -193,6 +195,9 @@ main() {
     audit)
       shift
       run_audit_command "$@"
+      ;;
+    tui)
+      tui_main_menu
       ;;
     host)
       printf 'Hostname: %s\n' "$(get_hostname)"
