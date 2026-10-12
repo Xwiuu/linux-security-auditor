@@ -9,10 +9,25 @@ audit_uid_zero_users() {
   users="$(get_uid_zero_users)"
 
   if [[ "$users" == "root" ]]; then
-    printf '%s\n' '[PASS] USER-001 Only root has UID 0'
+    finding \
+      id=USER-001 \
+      category=users \
+      severity=pass \
+      title="Only root has UID 0" \
+      description="No additional accounts with UID 0 were detected" \
+      expected="Only root should have UID 0" \
+      actual="root" \
+      recommendation="No action required"
   else
-    printf '%s\n' '[HIGH] USER-001 Multiple users with UID 0 detected'
-    printf '%s\n' "$users"
+    finding \
+      id=USER-001 \
+      category=users \
+      severity=high \
+      title="Multiple users with UID 0 detected" \
+      description="Accounts other than root have UID 0 and therefore root-equivalent privileges" \
+      expected="Only root should have UID 0" \
+      actual="$users" \
+      recommendation="Review and remove unnecessary UID 0 assignments"
   fi
 }
 
@@ -21,8 +36,23 @@ get_interactive_users() {
 }
 
 audit_interactive_users() {
-    printf '%s\n' '[INFO] USER-002 Interactive shell users:'
-    get_interactive_users
+  local users
+
+  users="$(get_interactive_users)"
+
+  if [[ -z "$users" ]]; then
+    users="none"
+  fi
+
+  finding \
+    id=USER-002 \
+    category=users \
+    severity=info \
+    title="Interactive shell users" \
+    description="Accounts that can log in because they have a non-nologin shell" \
+    expected="Only required accounts have a login shell" \
+    actual="$users" \
+    recommendation="Confirm every interactive account is still required"
 }
 
 
@@ -38,8 +68,23 @@ get_admin_users() {
 
 
 audit_admin_users() {
-  printf '%s\n' '[INFO] USER-003 Administrative group users:'
-  get_admin_users
+  local users
+
+  users="$(get_admin_users)"
+
+  if [[ -z "$users" ]]; then
+    users="none"
+  fi
+
+  finding \
+    id=USER-003 \
+    category=users \
+    severity=info \
+    title="Administrative group users" \
+    description="Accounts holding administrative privileges through the wheel or sudo group" \
+    expected="Administrative access limited to a known set of accounts" \
+    actual="$users" \
+    recommendation="Confirm every administrative account is still required"
 }
 
 
@@ -53,20 +98,43 @@ get_empty_password_users() {
 
 audit_empty_password_users() {
   local users
-  local status
+  local status=0
 
   users="$(get_empty_password_users)" || status=$?
 
-  if [[ "${status:-0}" -eq 2 ]]; then
-    printf '%s\n' '[INFO] USER-004 Password audit requires root privileges'
+  if [[ "$status" -eq 2 ]]; then
+    finding \
+      id=USER-004 \
+      category=users \
+      severity=info \
+      title="Password audit requires root privileges" \
+      description="/etc/shadow could not be read, so empty passwords were not evaluated" \
+      expected="/etc/shadow readable for the audit" \
+      actual="unreadable" \
+      recommendation="Run the audit as root to evaluate password hashes"
     return 0
   fi
 
   if [[ -z "$users" ]]; then
-    printf '%s\n' '[PASS] USER-004 No accounts with empty passwords'
+    finding \
+      id=USER-004 \
+      category=users \
+      severity=pass \
+      title="No accounts with empty passwords" \
+      description="No account in /etc/shadow has an empty password hash" \
+      expected="No empty password hashes" \
+      actual="none" \
+      recommendation="No action required"
   else
-    printf '%s\n' '[CRITICAL] USER-004 Accounts with empty passwords detected'
-    printf '%s\n' "$users"
+    finding \
+      id=USER-004 \
+      category=users \
+      severity=critical \
+      title="Accounts with empty passwords detected" \
+      description="Accounts with an empty password hash can authenticate without a password" \
+      expected="No empty password hashes" \
+      actual="$users" \
+      recommendation="Lock or re-hash the affected accounts immediately"
   fi
 }
 
@@ -85,15 +153,29 @@ audit_locked_users() {
   users="$(get_locked_users)" || status=$?
 
   if [[ "$status" -eq 2 ]]; then
-    printf '%s\n' '[INFO] USER-005 Locked account audit requires root privileges'
+    finding \
+      id=USER-005 \
+      category=users \
+      severity=info \
+      title="Locked account audit requires root privileges" \
+      description="/etc/shadow could not be read, so locked accounts were not evaluated" \
+      expected="/etc/shadow readable for the audit" \
+      actual="unreadable" \
+      recommendation="Run the audit as root to evaluate locked accounts"
     return 0
   fi
 
-  printf '%s\n' '[INFO] USER-005 Locked accounts:'
-
   if [[ -z "$users" ]]; then
-    printf '%s\n' 'none'
-  else
-    printf '%s\n' "$users"
+    users="none"
   fi
+
+  finding \
+    id=USER-005 \
+    category=users \
+    severity=info \
+    title="Locked accounts" \
+    description="Accounts with a locked password hash, listed for review" \
+    expected="Locked accounts reviewed" \
+    actual="$users" \
+    recommendation="Confirm no required account is locked out"
 }

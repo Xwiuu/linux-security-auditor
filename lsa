@@ -73,11 +73,11 @@ main() {
       check_broad_sudo_rules
       ;;
     permissions)
-      check_file_permissions /etc/passwd 644 root root
-      check_shadow_permissions /etc/shadow
-      check_file_permissions /etc/group 644 root root
-      check_shadow_permissions /etc/gshadow
-      check_file_permissions /etc/sudoers 440 root root
+      check_file_permissions PERM-001 /etc/passwd 644 root root
+      check_shadow_permissions PERM-002 /etc/shadow
+      check_file_permissions PERM-003 /etc/group 644 root root
+      check_shadow_permissions PERM-004 /etc/gshadow
+      check_file_permissions PERM-005 /etc/sudoers 440 root root
 
       target_home="$(get_target_home)"
       check_ssh_directory_permissions "$target_home"
