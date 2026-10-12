@@ -1,3 +1,0 @@
-id,category,severity,title,description,expected,actual,recommendation
-"AUTH-001","authentication","MEDIUM","High SSH authentication failure volume","SSH says ""access denied"", review logs","Fewer than 5 failed attempts","5 failed attempts","Review authentication logs"
-"FW-004","firewall","LOW","Broad firewall port range","Large allowed range detected","Restrictive rules","1025-65535/tcp","Review whether this range is required"
