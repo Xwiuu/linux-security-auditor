@@ -98,6 +98,7 @@ The gate runs:
 - CLI tests
 - TUI tests
 - runtime hardening tests
+- structured audits tests
 
 The same gate runs in GitHub Actions.
 

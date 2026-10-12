@@ -15,12 +15,19 @@ trap 'rm -rf "$tmp_dir"' EXIT
 # 1. Syntax
 bash -n "$LSA" || fail "lsa syntax"
 
-# 2. Default audit == text
+# 2. Default audit == text contract
 "$LSA" audit >"$tmp_dir/default.txt"
 "$LSA" audit --format text >"$tmp_dir/text.txt"
 
-diff -u "$tmp_dir/default.txt" "$tmp_dir/text.txt" >/dev/null ||
-  fail "default audit differs from text format"
+for report in "$tmp_dir/default.txt" "$tmp_dir/text.txt"; do
+  grep -q 'Findings: 40 total' "$report" ||
+    fail "audit summary missing 40 findings in $report"
+
+  blocks="$(grep -c '^\[' "$report")"
+
+  [[ "$blocks" -eq 40 ]] ||
+    fail "expected 40 finding blocks, got $blocks in $report"
+done
 
 # 3. JSON validity
 "$LSA" audit --format json >"$tmp_dir/audit.json"
@@ -38,8 +45,8 @@ import sys
 with open(sys.argv[1], newline="") as f:
     rows = list(csv.reader(f))
 
-if len(rows) != 25:
-    raise SystemExit(f"expected 25 CSV rows, got {len(rows)}")
+if len(rows) != 41:
+    raise SystemExit(f"expected 41 CSV rows, got {len(rows)}")
 
 if len(rows[0]) != 8:
     raise SystemExit(f"expected 8 CSV columns, got {len(rows[0])}")

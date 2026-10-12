@@ -58,4 +58,7 @@ bash tests/tui_test.sh
 printf '%s\n' '==> runtime hardening tests'
 bash tests/runtime_hardening_test.sh
 
+printf '%s\n' '==> structured audits tests'
+bash tests/structured_audits_test.sh
+
 printf '%s\n' 'all checks passed'

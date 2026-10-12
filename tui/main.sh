@@ -17,7 +17,7 @@ tui_run_audit() {
 
   printf '%s\n\n' 'Running security audit...'
 
-  run_audit
+  run_audit </dev/null
 
   printf '%s\n' 'Audit complete.'
   findings_summary

@@ -29,16 +29,25 @@ exit 0
 EOF
   chmod +x "$bin_dir/dnf"
 
+  source "$ROOT_DIR/lib/findings.sh"
   source "$ROOT_DIR/modules/updates.sh"
 
-  local output
-  output="$(check_pending_updates)"
+  finding_reset
 
-  grep -q 'UPDATE-001' <<<"$output" ||
-    fail "missing UPDATE-001"
+  local out_file="$tmp_dir/dnf-available.out"
+  check_pending_updates >"$out_file"
 
-  grep -q 'Pending package updates detected' <<<"$output" ||
-    fail "dnf status 100 was not handled"
+  [[ ! -s "$out_file" ]] ||
+    fail "check_pending_updates should store findings, not print"
+
+  [[ "$(findings_count)" -eq 1 ]] ||
+    fail "status 100 should emit one finding"
+
+  [[ "$(findings_get 0 id)" == "UPDATE-001" ]] ||
+    fail "finding id should be UPDATE-001"
+
+  [[ "$(findings_get 0 severity)" == "info" ]] ||
+    fail "status 100 should be info"
 }
 
 test_dnf_failure() {
@@ -49,16 +58,39 @@ exit 1
 EOF
   chmod +x "$bin_dir/dnf"
 
-  local output
-  output="$(check_pending_updates)"
+  finding_reset
 
-  grep -q 'could not be audited' <<<"$output" ||
-    fail "dnf failure should become non-auditable"
+  local out_file="$tmp_dir/dnf-fail.out"
+  check_pending_updates >"$out_file"
 
-  output="$(check_security_updates)"
+  [[ ! -s "$out_file" ]] ||
+    fail "check_pending_updates should store findings, not print"
 
-  grep -q 'could not be audited' <<<"$output" ||
-    fail "dnf updateinfo failure should become non-auditable"
+  [[ "$(findings_count)" -eq 1 ]] ||
+    fail "dnf failure should emit one UPDATE-001 finding"
+
+  [[ "$(findings_get 0 id)" == "UPDATE-001" ]] ||
+    fail "failed check should keep UPDATE-001"
+
+  [[ "$(findings_get 0 severity)" == "info" ]] ||
+    fail "dnf failure should be info, not high"
+
+  finding_reset
+
+  out_file="$tmp_dir/dnf-updateinfo-fail.out"
+  check_security_updates >"$out_file"
+
+  [[ ! -s "$out_file" ]] ||
+    fail "check_security_updates should store findings, not print"
+
+  [[ "$(findings_count)" -eq 1 ]] ||
+    fail "dnf updateinfo failure should emit one UPDATE-002 finding"
+
+  [[ "$(findings_get 0 id)" == "UPDATE-002" ]] ||
+    fail "failed security check should keep UPDATE-002"
+
+  [[ "$(findings_get 0 severity)" == "info" ]] ||
+    fail "updateinfo failure should be info, not high"
 }
 
 test_journal_permission_denied() {
@@ -169,15 +201,36 @@ esac
 EOF
   chmod +x "$bin_dir/firewall-cmd"
 
+  source "$ROOT_DIR/lib/findings.sh"
   source "$ROOT_DIR/modules/firewall.sh"
 
-  local output
-  output="$(check_active_zone_rules)"
+  finding_reset
 
-  grep -q 'Could not inspect zone public' <<<"$output" ||
-    fail "denied firewall zone should be reported, not crash"
+  local out_file="$tmp_dir/fw-zone.out"
+  check_active_zone_rules >"$out_file"
 
-  check_broad_port_ranges >/dev/null ||
+  [[ ! -s "$out_file" ]] ||
+    fail "check_active_zone_rules should store findings, not print"
+
+  [[ "$(findings_count)" -eq 1 ]] ||
+    fail "denied zone should emit one FW-003 finding"
+
+  [[ "$(findings_get 0 id)" == "FW-003" ]] ||
+    fail "denied zone finding should be FW-003"
+
+  [[ "$(findings_get 0 severity)" == "info" ]] ||
+    fail "denied zone should be info, not crash"
+
+  [[ "$(findings_get 0 actual)" == *"public: unavailable"* ]] ||
+    fail "FW-003 should aggregate the denied zone"
+
+  out_file="$tmp_dir/fw-ports.out"
+  check_broad_port_ranges >"$out_file"
+
+  [[ ! -s "$out_file" ]] ||
+    fail "check_broad_port_ranges should store findings, not print"
+
+  [[ "$(findings_count)" -eq 2 ]] ||
     fail "audit should continue after a denied zone"
 }
 

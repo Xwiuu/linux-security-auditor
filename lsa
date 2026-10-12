@@ -55,6 +55,7 @@ show_help() {
 
 run_audit() {
   finding_reset
+  reset_firewall_state
 
   # Users
   audit_uid_zero_users
@@ -87,6 +88,25 @@ run_audit() {
   check_pubkey_authentication
   check_max_auth_tries
   check_x11_forwarding
+
+  # Updates
+  check_pending_updates
+  check_security_updates
+
+  # Processes
+  summarize_root_processes
+  check_root_process_executables
+  check_root_process_executable_locations
+
+  # Ports
+  summarize_listening_ports
+  list_exposed_tcp_ports
+
+  # Firewall
+  check_firewalld_status
+  check_active_zones
+  check_active_zone_rules
+  check_broad_port_ranges
 }
 
 render_audit() {

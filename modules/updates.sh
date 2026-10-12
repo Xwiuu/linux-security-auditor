@@ -8,15 +8,37 @@ check_pending_updates() {
 
   case "$status" in
     0)
-      printf '%s\n' '[PASS] UPDATE-001 No pending package updates'
+      finding \
+        id=UPDATE-001 \
+        category=updates \
+        severity=pass \
+        title="No pending package updates" \
+        description="The package manager reports no pending package updates" \
+        expected="dnf check-update reports no outstanding updates" \
+        actual="dnf check-update exited with status 0" \
+        recommendation="No action required"
       ;;
     100)
-      printf '%s\n' '[INFO] UPDATE-001 Pending package updates detected'
-      printf '%s\n' "$output"
+      finding \
+        id=UPDATE-001 \
+        category=updates \
+        severity=info \
+        title="Pending package updates detected" \
+        description="The package manager reports package updates that have not been applied" \
+        expected="dnf check-update reports no outstanding updates" \
+        actual="dnf check-update exited with status 100" \
+        recommendation="Review and apply pending package updates"
       ;;
     *)
-      printf '%s\n' '[INFO] UPDATE-001 Package update status could not be audited'
-      printf '%s\n' "$output"
+      finding \
+        id=UPDATE-001 \
+        category=updates \
+        severity=info \
+        title="Package update status could not be audited" \
+        description="The pending package update check did not complete" \
+        expected="dnf check-update reports no outstanding updates" \
+        actual="dnf check-update exited with status $status" \
+        recommendation="Verify dnf availability and repository access"
       ;;
   esac
 }
@@ -29,8 +51,16 @@ check_security_updates() {
   output="$(LC_ALL=C dnf updateinfo list --security --updates 2>&1)" || status=$?
 
   if ((status != 0)); then
-    printf '%s\n' '[INFO] UPDATE-002 Security update status could not be audited'
-    printf '%s\n' "$output"
+    finding \
+      id=UPDATE-002 \
+      category=updates \
+      severity=info \
+      title="Security update status could not be audited" \
+      description="The pending security update check did not complete" \
+      expected="dnf updateinfo reports no outstanding security updates" \
+      actual="dnf updateinfo exited with status $status" \
+      recommendation="Verify dnf availability and repository access"
+
     return 0
   fi
 
@@ -47,8 +77,24 @@ check_security_updates() {
   )"
 
   if ((count == 0)); then
-    printf '%s\n' '[PASS] UPDATE-002 No pending security updates detected'
+    finding \
+      id=UPDATE-002 \
+      category=updates \
+      severity=pass \
+      title="No pending security updates detected" \
+      description="The package manager reports no pending security updates" \
+      expected="dnf updateinfo reports no outstanding security updates" \
+      actual="0 security updates listed" \
+      recommendation="No action required"
   else
-    printf '[WARN] UPDATE-002 Pending security updates: %s\n' "$count"
+    finding \
+      id=UPDATE-002 \
+      category=updates \
+      severity=medium \
+      title="Pending security updates detected" \
+      description="Security updates are available but have not been applied" \
+      expected="dnf updateinfo reports no outstanding security updates" \
+      actual="$count security updates listed" \
+      recommendation="Apply the pending security updates"
   fi
 }
