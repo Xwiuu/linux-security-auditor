@@ -2,7 +2,7 @@
 
 is_valid_severity() {
   case "$1" in
-    pass|info|low|medium|high|critical)
+    pass|info|low|medium|warn|high|critical)
       return 0
       ;;
     *)
@@ -36,6 +36,7 @@ finding_severity_tag() {
     info)     printf 'INFO' ;;
     low)      printf 'LOW' ;;
     medium)   printf 'MEDIUM' ;;
+    warn)     printf 'WARN' ;;
     high)     printf 'HIGH' ;;
     critical) printf 'CRITICAL' ;;
     *)        printf 'UNKNOWN' ;;
@@ -45,8 +46,9 @@ finding_severity_tag() {
 
 finding_severity_rank() {
   case "$1" in
-    critical) printf '5' ;;
-    high)     printf '4' ;;
+    critical) printf '6' ;;
+    high)     printf '5' ;;
+    warn)     printf '4' ;;
     medium)   printf '3' ;;
     low)      printf '2' ;;
     info)     printf '1' ;;
@@ -118,8 +120,6 @@ finding() {
     "$actual"
     "$recommendation"
   )
-
-  printf '[%s] %s %s\n' "$(finding_severity_tag "$severity")" "$id" "$title"
 }
 
 
@@ -157,6 +157,7 @@ findings_summary() {
   local info=0
   local low=0
   local medium=0
+  local warn=0
   local high=0
   local critical=0
 
@@ -170,17 +171,19 @@ findings_summary() {
       info)     info=$(( info + 1 )) ;;
       low)      low=$(( low + 1 )) ;;
       medium)   medium=$(( medium + 1 )) ;;
+      warn)     warn=$(( warn + 1 )) ;;
       high)     high=$(( high + 1 )) ;;
       critical) critical=$(( critical + 1 )) ;;
     esac
   done
 
-  printf 'Findings: %s total (%s pass, %s info, %s low, %s medium, %s high, %s critical)\n' \
+  printf 'Findings: %s total (%s pass, %s info, %s low, %s medium, %s warn, %s high, %s critical)\n' \
     "$total" \
     "$pass" \
     "$info" \
     "$low" \
     "$medium" \
+    "$warn" \
     "$high" \
     "$critical"
 }
