@@ -14,13 +14,11 @@ check_sshd_available() {
   fi
 }
 
-
 get_sshd_option() {
   local option="$1"
 
   sshd -T 2>/dev/null | awk -v key="$option" '$1 == key { print $2; exit }'
 }
-
 
 check_root_login() {
   local value
@@ -51,7 +49,6 @@ check_root_login() {
   fi
 }
 
-
 check_password_authentication() {
   local value
 
@@ -80,7 +77,6 @@ check_password_authentication() {
       recommendation="Set PasswordAuthentication no in /etc/ssh/sshd_config once keys are deployed."
   fi
 }
-
 
 check_empty_passwords() {
   local value
@@ -140,7 +136,6 @@ check_pubkey_authentication() {
   fi
 }
 
-
 check_max_auth_tries() {
   local value
 
@@ -157,7 +152,7 @@ check_max_auth_tries() {
       description="MaxAuthTries was not reported by the running sshd configuration." \
       expected="MaxAuthTries reported" actual="empty" \
       recommendation="Set MaxAuthTries explicitly in /etc/ssh/sshd_config."
-  elif (( value <= 4 )); then
+  elif ((value <= 4)); then
     finding id=SSH-006 category=ssh severity=pass title="MaxAuthTries is $value" \
       description="Authentication attempts per connection are limited." \
       expected="MaxAuthTries <= 4" actual="$value" \
@@ -169,7 +164,6 @@ check_max_auth_tries() {
       recommendation="Set MaxAuthTries 3 or 4 in /etc/ssh/sshd_config."
   fi
 }
-
 
 check_x11_forwarding() {
   local value

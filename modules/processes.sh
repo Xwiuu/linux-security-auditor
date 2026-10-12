@@ -48,7 +48,7 @@ check_root_process_executables() {
         "$pid" "$exe" "$owner"
       suspicious=1
 
-    elif (( (group_digit & 2) != 0 || (other_digit & 2) != 0 )); then
+    elif (((group_digit & 2) != 0 || (other_digit & 2) != 0)); then
       printf '[HIGH] PROC-002 Root process executable writable by group/others: PID=%s PATH=%s MODE=%s\n' \
         "$pid" "$exe" "$mode"
       suspicious=1
@@ -75,7 +75,7 @@ check_root_process_executable_locations() {
     [[ ! -e "$exe" ]] && continue
 
     case "$exe" in
-      /tmp/*|/var/tmp/*|/home/*|/run/user/*)
+      /tmp/* | /var/tmp/* | /home/* | /run/user/*)
         printf '[HIGH] PROC-003 Root process executable in unusual location: PID=%s PATH=%s\n' "$pid" "$exe"
         suspicious=1
         ;;

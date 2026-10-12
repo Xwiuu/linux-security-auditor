@@ -15,7 +15,7 @@ pass() {
 
 fail() {
   printf 'FAIL - %s\n' "$1"
-  failures=$(( failures + 1 ))
+  failures=$((failures + 1))
 }
 
 assert_eq() {
@@ -30,11 +30,10 @@ assert_eq() {
   fi
 }
 
-
 index=0
 for field in "${LSA_FINDING_FIELDS[@]}"; do
   assert_eq "$index" "$(finding_field_offset "$field")" "offset of $field is $index"
-  index=$(( index + 1 ))
+  index=$((index + 1))
 done
 
 assert_eq "8" "${#LSA_FINDING_FIELDS[@]}" "finding has 8 fields"
@@ -151,7 +150,7 @@ assert_eq "ssh" "$(findings_get 0 category)" "ssh module stored category"
 
 ssh_severity="$(findings_get 0 severity)"
 case "$ssh_severity" in
-  pass|info)
+  pass | info)
     pass "ssh module emits a finding through the engine"
     ;;
   *)
@@ -171,7 +170,7 @@ esac
 
 finding_reset
 
-if (( failures > 0 )); then
+if ((failures > 0)); then
   printf '\n%d test(s) failed\n' "$failures"
   exit 1
 fi

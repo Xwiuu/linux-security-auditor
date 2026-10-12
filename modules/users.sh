@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 get_uid_zero_users() {
-    awk -F: '$3 == 0 { print $1 }' /etc/passwd
+  awk -F: '$3 == 0 { print $1 }' /etc/passwd
 }
 
 audit_uid_zero_users() {
@@ -55,7 +55,6 @@ audit_interactive_users() {
     recommendation="Confirm every interactive account is still required"
 }
 
-
 get_admin_users() {
   if getent group wheel >/dev/null 2>&1; then
     getent group wheel | awk -F: '{ print $4 }'
@@ -65,7 +64,6 @@ get_admin_users() {
     printf '%s\n' 'none'
   fi
 }
-
 
 audit_admin_users() {
   local users
@@ -86,7 +84,6 @@ audit_admin_users() {
     actual="$users" \
     recommendation="Confirm every administrative account is still required"
 }
-
 
 get_empty_password_users() {
   if [[ ! -r /etc/shadow ]]; then

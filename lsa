@@ -4,7 +4,8 @@ set -Eeuo pipefail
 
 readonly LSA_VERSION="0.1.0"
 
-readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly ROOT_DIR
 
 source "$ROOT_DIR/lib/core.sh"
 source "$ROOT_DIR/lib/logger.sh"
@@ -27,35 +28,32 @@ source "$ROOT_DIR/parsers/ssh_auth.sh"
 source "$ROOT_DIR/tui/main.sh"
 
 show_version() {
-printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
+  printf 'Linux Security Auditor %s\n' "$LSA_VERSION"
 }
 
 show_help() {
-    printf '%s\n' 'Linux Security Auditor'
-    printf '\n'
-    printf '%s\n' 'Usage:'
-    printf '%s\n' '  ./lsa [option]'
-    printf '\n'
-    printf '%s\n' 'Options:'
-    printf '%s\n' '  -h, --help      Show this help message'
-    printf '%s\n' '  -v, --version   Show version'
-    printf '\n'
-    printf '%s\n' 'Commands:'
-    printf '%s\n' '  audit                     Run the complete security audit'
-    printf '%s\n' '  audit --format text       Render findings as text'
-    printf '%s\n' '  audit --format json       Render findings as JSON'
-    printf '%s\n' '  audit --format csv        Render findings as CSV'
-    printf '%s\n' '  audit --output FILE       Write the report to FILE'
-    printf '%s\n' '  tui                       Start interactive terminal interface'
-    printf '\n'
-    printf '%s\n' 'Examples:'
-    printf '%s\n' '  ./lsa audit --format json --output reports/audit.json'
+  printf '%s\n' 'Linux Security Auditor'
+  printf '\n'
+  printf '%s\n' 'Usage:'
+  printf '%s\n' '  ./lsa [option]'
+  printf '\n'
+  printf '%s\n' 'Options:'
+  printf '%s\n' '  -h, --help      Show this help message'
+  printf '%s\n' '  -v, --version   Show version'
+  printf '\n'
+  printf '%s\n' 'Commands:'
+  printf '%s\n' '  audit                     Run the complete security audit'
+  printf '%s\n' '  audit --format text       Render findings as text'
+  printf '%s\n' '  audit --format json       Render findings as JSON'
+  printf '%s\n' '  audit --format csv        Render findings as CSV'
+  printf '%s\n' '  audit --output FILE       Write the report to FILE'
+  printf '%s\n' '  tui                       Start interactive terminal interface'
+  printf '\n'
+  printf '%s\n' 'Examples:'
+  printf '%s\n' '  ./lsa audit --format json --output reports/audit.json'
 }
 
-
 run_audit() {
-  local target_home
-
   finding_reset
 
   # Users
@@ -79,9 +77,7 @@ run_audit() {
   check_shadow_permissions PERM-004 /etc/gshadow
   check_file_permissions PERM-005 /etc/sudoers 440 root root
 
-  target_home="$(get_target_home)"
-  check_ssh_directory_permissions "$target_home"
-  check_authorized_keys_permissions "$target_home"
+  audit_ssh_home_permissions
 
   # SSH
   check_sshd_available
@@ -92,7 +88,6 @@ run_audit() {
   check_max_auth_tries
   check_x11_forwarding
 }
-
 
 render_audit() {
   local format="$1"
@@ -116,15 +111,14 @@ render_audit() {
   esac
 }
 
-
 run_audit_command() {
   local format="text"
   local output_file=""
 
-  while (( $# > 0 )); do
+  while (($# > 0)); do
     case "$1" in
       --format)
-        if (( $# < 2 )); then
+        if (($# < 2)); then
           die "--format requires a value"
         fi
 
@@ -133,7 +127,7 @@ run_audit_command() {
         ;;
 
       --output)
-        if (( $# < 2 )); then
+        if (($# < 2)); then
           die "--output requires a file path"
         fi
 
@@ -148,7 +142,7 @@ run_audit_command() {
   done
 
   case "$format" in
-    text|json|csv)
+    text | json | csv)
       ;;
     *)
       die "unsupported output format: $format"
@@ -182,14 +176,12 @@ run_audit_command() {
   esac
 }
 
-
-
 main() {
   case "${1:-}" in
-    -h|--help)
+    -h | --help)
       show_help
       ;;
-    -v|--version)
+    -v | --version)
       show_version
       ;;
     audit)
@@ -230,9 +222,7 @@ main() {
       check_shadow_permissions PERM-004 /etc/gshadow
       check_file_permissions PERM-005 /etc/sudoers 440 root root
 
-      target_home="$(get_target_home)"
-      check_ssh_directory_permissions "$target_home"
-      check_authorized_keys_permissions "$target_home"
+      audit_ssh_home_permissions
       ;;
     ssh)
       check_sshd_available
@@ -273,6 +263,6 @@ main() {
     *)
       show_banner
       ;;
-    esac
+  esac
 }
 main "$@"

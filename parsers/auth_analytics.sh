@@ -74,5 +74,5 @@ build_auth_findings() {
       expected="Fewer than ${1:-5} failed attempts per source IP" \
       actual="${count} failed attempts from ${ip}" \
       recommendation="Review the source IP and related SSH authentication logs"
-  done <<< "$result"
+  done <<<"$result"
 }

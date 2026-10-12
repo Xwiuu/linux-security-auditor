@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 check_file_permissions() {
   local id="$1"
   local file="$2"
@@ -42,8 +44,8 @@ check_file_permissions() {
   fi
 
   if [[ "$mode" == "$expected_mode" &&
-        "$owner" == "$expected_owner" &&
-        "$group" == "$expected_group" ]]; then
+    "$owner" == "$expected_owner" &&
+    "$group" == "$expected_group" ]]; then
     finding \
       id="$id" \
       category=permissions \
@@ -65,7 +67,6 @@ check_file_permissions() {
       recommendation="Review and correct the file ownership and permissions"
   fi
 }
-
 
 check_shadow_permissions() {
   local id="$1"
@@ -119,8 +120,8 @@ check_shadow_permissions() {
       recommendation="No action required"
 
   elif [[ "$owner" == "root" &&
-          "$mode" == "640" &&
-          "$group" == "shadow" ]]; then
+    "$mode" == "640" &&
+    "$group" == "shadow" ]]; then
     finding \
       id="$id" \
       category=permissions \
@@ -143,7 +144,6 @@ check_shadow_permissions() {
       recommendation="Review and restrict access to the shadow file"
   fi
 }
-
 
 check_ssh_directory_permissions() {
   local home_dir="$1"
@@ -171,7 +171,6 @@ check_ssh_directory_permissions() {
     "$(stat -c '%G' "$home_dir")"
 }
 
-
 check_authorized_keys_permissions() {
   local home_dir="$1"
   local auth_file="$home_dir/.ssh/authorized_keys"
@@ -198,11 +197,51 @@ check_authorized_keys_permissions() {
     "$(stat -c '%G' "$home_dir")"
 }
 
+audit_ssh_home_permissions() {
+  local target_home
+
+  if ! target_home="$(get_target_home)"; then
+    finding \
+      id=PERM-006 \
+      category=permissions \
+      severity=info \
+      title="Target user home could not be resolved" \
+      description="The target account could not be found in the passwd database" \
+      expected="Resolvable target user account" \
+      actual="User lookup failed" \
+      recommendation="Verify that the target account still exists"
+
+    finding \
+      id=PERM-007 \
+      category=permissions \
+      severity=info \
+      title="authorized_keys could not be audited" \
+      description="The target home directory is unknown, so authorized_keys could not be located" \
+      expected="Resolvable target user account for authorized_keys auditing" \
+      actual="User lookup failed" \
+      recommendation="Verify that the target account still exists"
+
+    return 0
+  fi
+
+  check_ssh_directory_permissions "$target_home"
+  check_authorized_keys_permissions "$target_home"
+  return 0
+}
 
 get_target_home() {
+  local username
+  local passwd_entry
+
   if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
-    getent passwd "$SUDO_USER" | cut -d: -f6
+    username="$SUDO_USER"
   else
-    printf '%s\n' "$HOME"
+    username="${USER:-$(id -un)}"
   fi
+
+  if ! passwd_entry="$(getent passwd "$username")"; then
+    return 1
+  fi
+
+  printf '%s\n' "$passwd_entry" | cut -d: -f6
 }

@@ -2,7 +2,7 @@
 
 is_valid_severity() {
   case "$1" in
-    pass|info|low|medium|warn|high|critical)
+    pass | info | low | medium | warn | high | critical)
       return 0
       ;;
     *)
@@ -24,54 +24,49 @@ declare -ga LSA_FINDING_FIELDS=(
 
 declare -ga LSA_FINDINGS=()
 
-
 finding_reset() {
   LSA_FINDINGS=()
 }
 
-
 finding_severity_tag() {
   case "$1" in
-    pass)     printf 'PASS' ;;
-    info)     printf 'INFO' ;;
-    low)      printf 'LOW' ;;
-    medium)   printf 'MEDIUM' ;;
-    warn)     printf 'WARN' ;;
-    high)     printf 'HIGH' ;;
+    pass) printf 'PASS' ;;
+    info) printf 'INFO' ;;
+    low) printf 'LOW' ;;
+    medium) printf 'MEDIUM' ;;
+    warn) printf 'WARN' ;;
+    high) printf 'HIGH' ;;
     critical) printf 'CRITICAL' ;;
-    *)        printf 'UNKNOWN' ;;
+    *) printf 'UNKNOWN' ;;
   esac
 }
-
 
 finding_severity_rank() {
   case "$1" in
     critical) printf '6' ;;
-    high)     printf '5' ;;
-    warn)     printf '4' ;;
-    medium)   printf '3' ;;
-    low)      printf '2' ;;
-    info)     printf '1' ;;
-    pass)     printf '0' ;;
-    *)        return 1 ;;
+    high) printf '5' ;;
+    warn) printf '4' ;;
+    medium) printf '3' ;;
+    low) printf '2' ;;
+    info) printf '1' ;;
+    pass) printf '0' ;;
+    *) return 1 ;;
   esac
 }
-
 
 finding_field_offset() {
   case "$1" in
-    id)             printf '0' ;;
-    category)       printf '1' ;;
-    severity)       printf '2' ;;
-    title)          printf '3' ;;
-    description)    printf '4' ;;
-    expected)       printf '5' ;;
-    actual)         printf '6' ;;
+    id) printf '0' ;;
+    category) printf '1' ;;
+    severity) printf '2' ;;
+    title) printf '3' ;;
+    description) printf '4' ;;
+    expected) printf '5' ;;
+    actual) printf '6' ;;
     recommendation) printf '7' ;;
-    *)              return 1 ;;
+    *) return 1 ;;
   esac
 }
-
 
 finding() {
   local id="" category="" severity="info" title=""
@@ -80,13 +75,13 @@ finding() {
 
   for arg in "$@"; do
     case "$arg" in
-      id=*)             id="${arg#id=}" ;;
-      category=*)       category="${arg#category=}" ;;
-      severity=*)       severity="${arg#severity=}" ;;
-      title=*)          title="${arg#title=}" ;;
-      description=*)    description="${arg#description=}" ;;
-      expected=*)       expected="${arg#expected=}" ;;
-      actual=*)         actual="${arg#actual=}" ;;
+      id=*) id="${arg#id=}" ;;
+      category=*) category="${arg#category=}" ;;
+      severity=*) severity="${arg#severity=}" ;;
+      title=*) title="${arg#title=}" ;;
+      description=*) description="${arg#description=}" ;;
+      expected=*) expected="${arg#expected=}" ;;
+      actual=*) actual="${arg#actual=}" ;;
       recommendation=*) recommendation="${arg#recommendation=}" ;;
       *)
         printf 'Error: unknown finding field: %s\n' "$arg" >&2
@@ -122,11 +117,9 @@ finding() {
   )
 }
 
-
 findings_count() {
-  printf '%s\n' "$(( ${#LSA_FINDINGS[@]} / ${#LSA_FINDING_FIELDS[@]} ))"
+  printf '%s\n' "$((${#LSA_FINDINGS[@]} / ${#LSA_FINDING_FIELDS[@]}))"
 }
-
 
 findings_get() {
   local index="$1"
@@ -144,10 +137,9 @@ findings_get() {
     return 1
   fi
 
-  slot=$(( index * ${#LSA_FINDING_FIELDS[@]} + offset ))
+  slot=$((index * ${#LSA_FINDING_FIELDS[@]} + offset))
   printf '%s\n' "${LSA_FINDINGS[$slot]:-}"
 }
-
 
 findings_summary() {
   local total
@@ -163,17 +155,17 @@ findings_summary() {
 
   total="$(findings_count)"
 
-  for (( i = 0; i < total; i++ )); do
+  for ((i = 0; i < total; i++)); do
     severity="$(findings_get "$i" severity)"
 
     case "$severity" in
-      pass)     pass=$(( pass + 1 )) ;;
-      info)     info=$(( info + 1 )) ;;
-      low)      low=$(( low + 1 )) ;;
-      medium)   medium=$(( medium + 1 )) ;;
-      warn)     warn=$(( warn + 1 )) ;;
-      high)     high=$(( high + 1 )) ;;
-      critical) critical=$(( critical + 1 )) ;;
+      pass) pass=$((pass + 1)) ;;
+      info) info=$((info + 1)) ;;
+      low) low=$((low + 1)) ;;
+      medium) medium=$((medium + 1)) ;;
+      warn) warn=$((warn + 1)) ;;
+      high) high=$((high + 1)) ;;
+      critical) critical=$((critical + 1)) ;;
     esac
   done
 

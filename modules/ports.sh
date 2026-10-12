@@ -10,7 +10,7 @@ audit_listening_ports() {
   while IFS= read -r line; do
     [[ "$line" == Netid* ]] && continue
 
-    local_address="$(awk '{ print $5 }' <<< "$line")"
+    local_address="$(awk '{ print $5 }' <<<"$line")"
     addr_no_port="${local_address%:*}"
     iface=""
     [[ "$addr_no_port" == *%* ]] && iface="${addr_no_port#*%}"
@@ -39,22 +39,22 @@ summarize_listening_ports() {
   output="$(audit_listening_ports)"
 
   printf '[INFO] PORT-001 Local listeners: %s\n' \
-    "$(grep -c '^\[LOCAL\]' <<< "$output" || true)"
+    "$(grep -c '^\[LOCAL\]' <<<"$output" || true)"
 
   printf '[INFO] PORT-002 LAN listeners: %s\n' \
-    "$(grep -c '^\[LAN\]' <<< "$output" || true)"
+    "$(grep -c '^\[LAN\]' <<<"$output" || true)"
 
   printf '[INFO] PORT-003 VPN listeners: %s\n' \
-    "$(grep -c '^\[VPN\]' <<< "$output" || true)"
+    "$(grep -c '^\[VPN\]' <<<"$output" || true)"
 
   printf '[INFO] PORT-004 Docker listeners: %s\n' \
-    "$(grep -c '^\[DOCKER\]' <<< "$output" || true)"
+    "$(grep -c '^\[DOCKER\]' <<<"$output" || true)"
 
   printf '[INFO] PORT-005 Multicast listeners: %s\n' \
-    "$(grep -c '^\[MULTICAST\]' <<< "$output" || true)"
+    "$(grep -c '^\[MULTICAST\]' <<<"$output" || true)"
 
   printf '[INFO] PORT-006 Globally exposed listeners: %s\n' \
-    "$(grep -c '^\[EXPOSED\]' <<< "$output" || true)"
+    "$(grep -c '^\[EXPOSED\]' <<<"$output" || true)"
 }
 
 list_exposed_tcp_ports() {
@@ -64,6 +64,6 @@ list_exposed_tcp_ports() {
 
   printf '%s\n' '[INFO] PORT-007 Globally exposed TCP listeners:'
 
-  grep '^\[EXPOSED\] tcp[[:space:]]*LISTEN' <<< "$output" || \
+  grep '^\[EXPOSED\] tcp[[:space:]]*LISTEN' <<<"$output" ||
     printf '%s\n' 'none'
 }

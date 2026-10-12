@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"
+
 get_hostname() {
   hostname
 }
@@ -13,17 +15,29 @@ get_architecture() {
 }
 
 get_os_name() {
-  source /etc/os-release
-  printf '%s\n' "$NAME"
+  local NAME=""
+
+  if [[ -r "$OS_RELEASE_FILE" ]]; then
+    # shellcheck source=/etc/os-release
+    source "$OS_RELEASE_FILE"
+  fi
+
+  printf '%s\n' "${NAME:-Unknown}"
 }
 
 get_os_version() {
-  source /etc/os-release
-  printf '%s\n' "$VERSION"
+  local VERSION=""
+
+  if [[ -r "$OS_RELEASE_FILE" ]]; then
+    # shellcheck source=/etc/os-release
+    source "$OS_RELEASE_FILE"
+  fi
+
+  printf '%s\n' "${VERSION:-Unknown}"
 }
 
 get_init_system() {
-  if command -v systemctl>/dev/null 2>&1; then
+  if command -v systemctl >/dev/null 2>&1; then
     printf '%s\n' 'systemd'
   else
     printf '%s\n' 'unknown'
@@ -45,5 +59,3 @@ get_package_manager() {
 get_uptime() {
   uptime -p
 }
-
-

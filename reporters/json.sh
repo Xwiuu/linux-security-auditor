@@ -12,7 +12,6 @@ json_escape() {
   printf '%s' "$value"
 }
 
-
 render_json_finding() {
   local index="$1"
 
@@ -36,7 +35,6 @@ render_json_finding() {
   printf '}'
 }
 
-
 render_json_findings() {
   local total
   local i
@@ -45,10 +43,10 @@ render_json_findings() {
 
   printf '{"findings":['
 
-  for (( i = 0; i < total; i++ )); do
+  for ((i = 0; i < total; i++)); do
     render_json_finding "$i"
 
-    if (( i < total - 1 )); then
+    if ((i < total - 1)); then
       printf ','
     fi
   done
@@ -56,9 +54,8 @@ render_json_findings() {
   printf ']}\n'
 }
 
-
 write_json_report() {
   local output_file="$1"
 
-  render_json_findings > "$output_file"
+  render_json_findings >"$output_file"
 }

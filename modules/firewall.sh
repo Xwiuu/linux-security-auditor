@@ -37,14 +37,27 @@ check_active_zones() {
 
 check_active_zone_rules() {
   local zone
+  local zone_output
+  local status
 
   printf '%s\n' '[INFO] FW-003 Active zone rules:'
 
   while IFS= read -r zone; do
+    zone_output=''
+    status=0
+
+    zone_output="$(firewall-cmd --zone="$zone" --list-all 2>&1)" || status=$?
+
+    if ((status != 0)); then
+      printf '[INFO] FW-003 Could not inspect zone %s\n' "$zone"
+      printf '%s\n' "$zone_output"
+      continue
+    fi
+
     printf '\nZone: %s\n' "$zone"
-    firewall-cmd --zone="$zone" --list-all
+    printf '%s\n' "$zone_output"
   done < <(
-    firewall-cmd --get-active-zones |
+    firewall-cmd --get-active-zones 2>/dev/null |
       awk '/^[^[:space:]]/ { print $1 }'
   )
 }
@@ -70,7 +83,7 @@ check_broad_port_ranges() {
         end="${BASH_REMATCH[2]}"
         span=$((end - start + 1))
 
-        if (( span >= 1000 )); then
+        if ((span >= 1000)); then
           printf '[WARN] FW-004 Broad port range in zone %s: %s/%s (%s ports)\n' \
             "$zone" "$range" "$protocol" "$span"
         fi

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+SUDOERS_FILE="${SUDOERS_FILE:-/etc/sudoers}"
+
 check_sudoers_syntax() {
   local output
   local status=0
@@ -20,7 +22,7 @@ check_sudoers_syntax() {
 
   output="$(visudo -c 2>&1)" || status=$?
 
-  if (( status == 0 )); then
+  if ((status == 0)); then
     finding \
       id=SUDO-001 \
       category=sudo \
@@ -31,7 +33,7 @@ check_sudoers_syntax() {
       actual="Syntax validation passed" \
       recommendation="No action required"
 
-  elif grep -qiE 'permission denied|permissão negada' <<< "$output"; then
+  elif grep -qiE 'permission denied|permissão negada' <<<"$output"; then
     finding \
       id=SUDO-001 \
       category=sudo \
@@ -55,15 +57,28 @@ check_sudoers_syntax() {
   fi
 }
 
-
 check_sudoers_permissions() {
   local mode
   local owner
   local group
 
-  mode="$(stat -c '%a' /etc/sudoers)"
-  owner="$(stat -c '%U' /etc/sudoers)"
-  group="$(stat -c '%G' /etc/sudoers)"
+  if [[ ! -e "$SUDOERS_FILE" ]]; then
+    finding \
+      id=SUDO-002 \
+      category=sudo \
+      severity=info \
+      title="$SUDOERS_FILE not found" \
+      description="The main sudoers file could not be audited because it is absent" \
+      expected="/etc/sudoers present when sudo is installed" \
+      actual="File not found" \
+      recommendation="Confirm whether sudo is installed and required"
+
+    return 0
+  fi
+
+  mode="$(stat -c '%a' "$SUDOERS_FILE")"
+  owner="$(stat -c '%U' "$SUDOERS_FILE")"
+  group="$(stat -c '%G' "$SUDOERS_FILE")"
 
   if [[ "$mode" == "440" && "$owner" == "root" && "$group" == "root" ]]; then
     finding \
@@ -87,7 +102,6 @@ check_sudoers_permissions() {
       recommendation="Review and correct the ownership and permissions of /etc/sudoers"
   fi
 }
-
 
 check_sudoers_d_permissions() {
   local file
@@ -126,7 +140,7 @@ check_sudoers_d_permissions() {
   fi
 
   while IFS= read -r file; do
-    count=$(( count + 1 ))
+    count=$((count + 1))
 
     mode="$(stat -c '%a' "$file")"
     owner="$(stat -c '%U' "$file")"
@@ -139,7 +153,7 @@ check_sudoers_d_permissions() {
     find /etc/sudoers.d -maxdepth 1 -type f 2>/dev/null
   )
 
-  if (( count == 0 )); then
+  if ((count == 0)); then
     finding \
       id=SUDO-003 \
       category=sudo \
@@ -172,11 +186,10 @@ check_sudoers_d_permissions() {
   fi
 }
 
-
 check_nopasswd_rules() {
   local matches
 
-  if [[ ! -r /etc/sudoers ]]; then
+  if [[ ! -r "$SUDOERS_FILE" ]]; then
     finding \
       id=SUDO-004 \
       category=sudo \
@@ -191,9 +204,9 @@ check_nopasswd_rules() {
   fi
 
   matches="$(
-    grep -RIn --include='*' 'NOPASSWD' /etc/sudoers /etc/sudoers.d 2>/dev/null \
-      | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' \
-      || true
+    grep -RIn --include='*' 'NOPASSWD' "$SUDOERS_FILE" /etc/sudoers.d 2>/dev/null |
+      grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' ||
+      true
   )"
 
   if [[ -z "$matches" ]]; then
@@ -219,11 +232,10 @@ check_nopasswd_rules() {
   fi
 }
 
-
 check_broad_sudo_rules() {
   local matches
 
-  if [[ ! -r /etc/sudoers ]]; then
+  if [[ ! -r "$SUDOERS_FILE" ]]; then
     finding \
       id=SUDO-005 \
       category=sudo \
@@ -239,9 +251,9 @@ check_broad_sudo_rules() {
 
   matches="$(
     grep -RIn --include='*' -E 'ALL[[:space:]]*=[[:space:]]*\(ALL(:ALL)?\)[[:space:]]*ALL' \
-      /etc/sudoers /etc/sudoers.d 2>/dev/null \
-      | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' \
-      || true
+      "$SUDOERS_FILE" /etc/sudoers.d 2>/dev/null |
+      grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' ||
+      true
   )"
 
   if [[ -z "$matches" ]]; then

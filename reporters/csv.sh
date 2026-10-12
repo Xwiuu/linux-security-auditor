@@ -8,7 +8,6 @@ csv_escape() {
   printf '"%s"' "$value"
 }
 
-
 render_csv_findings() {
   local total
   local i
@@ -18,7 +17,7 @@ render_csv_findings() {
   printf '%s\n' \
     'id,category,severity,title,description,expected,actual,recommendation'
 
-  for (( i = 0; i < total; i++ )); do
+  for ((i = 0; i < total; i++)); do
     printf '%s,%s,%s,%s,%s,%s,%s,%s\n' \
       "$(csv_escape "$(findings_get "$i" id)")" \
       "$(csv_escape "$(findings_get "$i" category)")" \
@@ -31,9 +30,8 @@ render_csv_findings() {
   done
 }
 
-
 write_csv_report() {
   local output_file="$1"
 
-  render_csv_findings > "$output_file"
+  render_csv_findings >"$output_file"
 }

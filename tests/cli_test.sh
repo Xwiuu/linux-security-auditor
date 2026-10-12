@@ -16,20 +16,20 @@ trap 'rm -rf "$tmp_dir"' EXIT
 bash -n "$LSA" || fail "lsa syntax"
 
 # 2. Default audit == text
-"$LSA" audit > "$tmp_dir/default.txt"
-"$LSA" audit --format text > "$tmp_dir/text.txt"
+"$LSA" audit >"$tmp_dir/default.txt"
+"$LSA" audit --format text >"$tmp_dir/text.txt"
 
 diff -u "$tmp_dir/default.txt" "$tmp_dir/text.txt" >/dev/null ||
   fail "default audit differs from text format"
 
 # 3. JSON validity
-"$LSA" audit --format json > "$tmp_dir/audit.json"
+"$LSA" audit --format json >"$tmp_dir/audit.json"
 
 python3 -m json.tool "$tmp_dir/audit.json" >/dev/null ||
   fail "invalid JSON output"
 
 # 4. CSV shape
-"$LSA" audit --format csv > "$tmp_dir/audit.csv"
+"$LSA" audit --format csv >"$tmp_dir/audit.csv"
 
 python3 - "$tmp_dir/audit.csv" <<'PY'
 import csv

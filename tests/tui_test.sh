@@ -20,7 +20,7 @@ bash -n "$ROOT_DIR/tui/main.sh" ||
 # Header
 header="$(tui_header)"
 
-grep -q 'Linux Security Auditor' <<< "$header" ||
+grep -q 'Linux Security Auditor' <<<"$header" ||
   fail "missing TUI title"
 
 # No findings path
@@ -28,7 +28,7 @@ finding_reset
 
 output="$(tui_view_findings)"
 
-grep -q 'No findings loaded.' <<< "$output" ||
+grep -q 'No findings loaded.' <<<"$output" ||
   fail "empty findings state missing"
 
 # Export without findings
@@ -36,7 +36,7 @@ output="$(
   printf '1\n' | tui_export_report
 )"
 
-grep -q 'No findings loaded.' <<< "$output" ||
+grep -q 'No findings loaded.' <<<"$output" ||
   fail "export without findings should be blocked"
 
 printf '%s\n' 'tui tests passed'

@@ -31,7 +31,7 @@ tui_view_findings() {
 
   count="$(findings_count)"
 
-  if (( count == 0 )); then
+  if ((count == 0)); then
     printf '%s\n' 'No findings loaded.'
     printf '%s\n' 'Run a full audit first.'
     return 0
@@ -52,7 +52,7 @@ tui_export_report() {
   tui_clear
   tui_header
 
-  if (( $(findings_count) == 0 )); then
+  if (($(findings_count) == 0)); then
     printf '%s\n' 'No findings loaded.'
     printf '%s\n' 'Run a full audit first.'
     return 0
@@ -78,7 +78,7 @@ tui_export_report() {
     3)
       format="csv"
       ;;
-    b|B)
+    b | B)
       return 0
       ;;
     *)
@@ -154,7 +154,7 @@ tui_main_menu() {
       4)
         printf '%s\n' 'System information not wired yet.'
         ;;
-      q|Q)
+      q | Q)
         return 0
         ;;
       *)

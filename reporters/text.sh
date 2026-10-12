@@ -6,12 +6,12 @@ render_text_findings() {
 
   total="$(findings_count)"
 
-  if (( total == 0 )); then
+  if ((total == 0)); then
     printf '%s\n' 'No findings.'
     return 0
   fi
 
-  for (( i = 0; i < total; i++ )); do
+  for ((i = 0; i < total; i++)); do
     printf '[%s] %s\n' \
       "$(finding_severity_tag "$(findings_get "$i" severity)")" \
       "$(findings_get "$i" id)"
@@ -30,7 +30,7 @@ render_text_findings() {
     printf 'Recommendation:\n%s\n' \
       "$(findings_get "$i" recommendation)"
 
-    if (( i < total - 1 )); then
+    if ((i < total - 1)); then
       printf '\n%s\n\n' '----------------------------------------'
     fi
   done
@@ -39,9 +39,8 @@ render_text_findings() {
   findings_summary
 }
 
-
 write_text_report() {
   local output_file="$1"
 
-  render_text_findings > "$output_file"
+  render_text_findings >"$output_file"
 }
