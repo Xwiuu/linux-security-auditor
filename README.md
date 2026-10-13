@@ -148,6 +148,6 @@ The same gate runs in GitHub Actions on every push and pull request.
 
 ## Project status
 
-Current development version: `0.1.0`.
+Current version: `1.0.0`.
 
-Preparing for v1.0. Planned after v1.0: migrating the remaining journal and sshlog checks to the structured finding engine, and packaging (RPM/DEB) if there is real demand.
+First stable release. Future work, if there is demand: migrating the remaining journal and sshlog checks to the structured finding engine, and packaging (RPM/DEB).

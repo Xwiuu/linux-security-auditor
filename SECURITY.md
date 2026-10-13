@@ -25,4 +25,4 @@ Out of scope:
 
 ## Supported versions
 
-The project is pre-1.0. Security fixes are applied to the latest commit on `main`.
+Security fixes are applied to the latest release and to `main`.

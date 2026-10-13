@@ -30,7 +30,7 @@ prefix="$tmp_dir/prefix"
 
 version="$("$prefix/bin/lsa" --version)"
 
-[[ "$version" == "Linux Security Auditor 0.1.0" ]] ||
+[[ "$version" == "Linux Security Auditor 1.0.0" ]] ||
   fail "unexpected installed version: $version"
 
 # O bug da 24A: instalado não pode depender do cwd do repositório
