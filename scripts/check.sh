@@ -58,6 +58,9 @@ bash tests/tui_test.sh
 printf '%s\n' '==> runtime hardening tests'
 bash tests/runtime_hardening_test.sh
 
+printf '%s\n' '==> installer tests'
+bash tests/installer_test.sh
+
 printf '%s\n' '==> structured audits tests'
 bash tests/structured_audits_test.sh
 

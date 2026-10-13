@@ -4,7 +4,15 @@ set -Eeuo pipefail
 
 readonly LSA_VERSION="0.1.0"
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+
+ROOT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 readonly ROOT_DIR
 
 source "$ROOT_DIR/lib/core.sh"
