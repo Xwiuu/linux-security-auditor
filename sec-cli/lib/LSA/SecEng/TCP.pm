@@ -10,6 +10,22 @@ use JSON::PP;
 
 our $VERSION = '1.0.0';
 
+=head1 NAME
+
+LSA::SecEng::TCP - TCP Connectivity and Latency Diagnostics
+
+=head1 RESOLUTION AND TIMEOUT LIMITATIONS
+
+When connecting to target endpoints specified by hostname rather than numeric IP address,
+C<IO::Socket::IP> invokes the standard C library synchronous resolver (C<getaddrinfo>).
+Under POSIX/glibc, synchronous resolver calls block until name resolution completes or
+system-level resolver timeouts elapse. Consequently, application-level connection timeouts
+apply to the TCP socket connection phase (the non-blocking C<connect> / C<select> window),
+and do not strictly bound synchronous upstream DNS lookup latency prior to socket initialization.
+Callers requiring bounded DNS resolution should resolve hostnames beforehand using C<resolve_dns>.
+
+=cut
+
 sub validate_target_host {
     my ($host) = @_;
     return 0 unless defined $host && length($host);
@@ -65,7 +81,6 @@ sub check_tcp {
 
     unless ($sock) {
         my $err = $@ || $!;
-        my $elapsed = sprintf("%.2f", (time() - $start_time) * 1000.0);
         return (
             {
                 target_host     => $host,
@@ -75,8 +90,8 @@ sub check_tcp {
                 timeout_seconds => $timeout + 0.0,
             },
             {
-                error => "Socket initialization / resolution failed: $err",
-                code  => 3,
+                error  => "Socket initialization / resolution failed: $err",
+                code   => 3,
                 status => 'error',
             }
         );
@@ -88,16 +103,60 @@ sub check_tcp {
         return (undef, { error => "Invalid socket file descriptor", code => 3 });
     }
 
-    my $wvec = "";
-    vec($wvec, $fileno, 1) = 1;
-    my $rvec = $wvec;
+    # Bounded select loop with EINTR retry and remaining timeout calculation
+    my $rem_timeout = $timeout;
+    my $nfound;
 
-    # Wait up to $timeout seconds for socket to become ready
-    my $nfound = select($rvec, $wvec, undef, $timeout);
+    while (1) {
+        my $wvec = "";
+        vec($wvec, $fileno, 1) = 1;
+        my $rvec = $wvec;
+
+        my $iter_start = time();
+        $nfound = $args{_select_fn}
+            ? $args{_select_fn}->($rvec, $wvec, undef, $rem_timeout)
+            : select($rvec, $wvec, undef, $rem_timeout);
+        my $select_err = $!;
+
+        if (defined $nfound && $nfound > 0) {
+            last; # Socket ready for read/write
+        } elsif (defined $nfound && $nfound == 0) {
+            last; # Timed out
+        } else {
+            # select returned undef / error (< 0)
+            if ($select_err == EINTR) {
+                my $spent = time() - $iter_start;
+                $rem_timeout -= $spent;
+                if ($rem_timeout <= 0) {
+                    $nfound = 0; # Expired while interrupted
+                    last;
+                }
+                next; # Retry with remaining duration
+            } else {
+                # Non-recoverable select failure
+                close($sock);
+                my $elapsed_ms = sprintf("%.2f", (time() - $start_time) * 1000.0);
+                return (
+                    {
+                        target_host     => $host,
+                        port            => int($port),
+                        reachable       => JSON::PP::false,
+                        latency_ms      => $elapsed_ms + 0.0,
+                        timeout_seconds => $timeout + 0.0,
+                    },
+                    {
+                        error  => "Socket select failed: $select_err",
+                        code   => 3,
+                        status => 'error',
+                    }
+                );
+            }
+        }
+    }
+
     my $elapsed_ms = sprintf("%.2f", (time() - $start_time) * 1000.0);
 
     if ($nfound == 0) {
-        # Timed out
         close($sock);
         return (
             {
@@ -115,10 +174,31 @@ sub check_tcp {
         );
     }
 
-    # Socket is ready: retrieve error status via getsockopt
-    my $opt = getsockopt($sock, SOL_SOCKET, SO_ERROR);
-    my $sock_err = defined $opt ? unpack("i", $opt) : 0;
+    # Socket is ready: inspect socket error status via getsockopt
+    my $opt = $args{_getsockopt_fn}
+        ? $args{_getsockopt_fn}->($sock)
+        : getsockopt($sock, SOL_SOCKET, SO_ERROR);
+    my $getopt_err = $!;
     close($sock);
+
+    unless (defined $opt) {
+        return (
+            {
+                target_host     => $host,
+                port            => int($port),
+                reachable       => JSON::PP::false,
+                latency_ms      => $elapsed_ms + 0.0,
+                timeout_seconds => $timeout + 0.0,
+            },
+            {
+                error  => "getsockopt(SO_ERROR) failed: $getopt_err",
+                code   => 3,
+                status => 'error',
+            }
+        );
+    }
+
+    my $sock_err = unpack("i", $opt);
 
     if ($sock_err == 0) {
         # Successfully connected
@@ -165,7 +245,7 @@ sub check_tcp {
             }
         );
     } else {
-        # Host unreachable or network error
+        # Host unreachable or other network error
         my $err_str = strerror($sock_err);
         return (
             {

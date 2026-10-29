@@ -44,14 +44,40 @@ is($err_inv4->{code}, 2, "Hostname with leading hyphen label rejected with code 
 my ($res_inv5, $err_inv5) = LSA::SecEng::DNS::resolve_dns(hostname => 'localhost', timeout => 15.0);
 is($err_inv5->{code}, 2, "Timeout > 10.0s rejected with code 2");
 
-# 4. Resolver Error Handling (RFC 6761 .invalid domain)
-# RFC 6761 guarantees that queries for *.invalid MUST NOT be routed or resolved
+# 4. Resolver Error Handling (RFC 6761 .invalid domain - no public internet dependency)
 my ($res_err, $err_err) = LSA::SecEng::DNS::resolve_dns(
     hostname => 'unresolvable-test-host.invalid',
     timeout  => 1.0,
 );
 
 is($err_err->{code}, 3, "Non-existent RFC 6761 .invalid domain returns exit code 3");
+is($err_err->{status}, 'error', "Status is error for unresolvable host");
 like($err_err->{error}, qr/DNS resolution failed/, "Error message correctly formatted");
+
+# 5. Unexpected Exception Handling (Sprint 01A FIX-06: distinguish eval exception from resolver error)
+my ($res_exc, $err_exc) = LSA::SecEng::DNS::resolve_dns(
+    hostname           => 'localhost',
+    _getaddrinfo_fn    => sub {
+        die "Simulated internal resolver crash or library abort\n";
+    },
+);
+
+ok(defined $err_exc, "Unexpected exception returns error info");
+is($err_exc->{code}, 3, "Unexpected exception exits with code 3 (not success, not timeout)");
+is($err_exc->{status}, 'error', "Status is 'error' on unexpected exception");
+like($err_exc->{error}, qr/Unexpected resolver exception: Simulated internal resolver crash/, "Exception message captured without reporting success");
+
+# 6. Established Timeout Simulation (Sprint 01A FIX-06: exit code 124 strictly for established timeout)
+my ($res_to, $err_to) = LSA::SecEng::DNS::resolve_dns(
+    hostname           => 'localhost',
+    _getaddrinfo_fn    => sub {
+        die "RESOLVER_TIMEOUT\n";
+    },
+);
+
+ok(defined $err_to, "Established timeout returns error info");
+is($err_to->{code}, 124, "Timeout exits strictly with code 124");
+is($err_to->{status}, 'timeout', "Status is 'timeout'");
+like($err_to->{error}, qr/timed out/, "Error describes timeout event");
 
 done_testing();

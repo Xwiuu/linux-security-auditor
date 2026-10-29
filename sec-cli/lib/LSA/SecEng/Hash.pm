@@ -3,11 +3,50 @@ package LSA::SecEng::Hash;
 use strict;
 use warnings;
 use Digest::SHA;
-use Fcntl qw(:mode);
+use Fcntl qw(O_RDONLY O_NOFOLLOW O_NONBLOCK F_SETFD FD_CLOEXEC :mode);
+use Errno qw(ELOOP);
 use JSON::PP;
 
 our $VERSION = '1.0.0';
 use constant CHUNK_SIZE => 65536; # 64 KB streaming buffer
+
+=head1 NAME
+
+LSA::SecEng::Hash - Cryptographic File Hashing with Concurrency and Symlink Protections
+
+=head1 SYMLINK AND RACE-CONDITION POLICY
+
+Per Sprint 01 security baseline requirements, symbolic links are explicitly rejected.
+To eliminate Time-of-Check to Time-of-Use (TOCTOU) race conditions between path inspection
+and file opening:
+
+1. Files are opened directly using C<sysopen> with atomic flags:
+   C<O_RDONLY | O_NOFOLLOW | O_NONBLOCK>.
+   On Linux and POSIX systems supporting C<O_NOFOLLOW>, attempting to open a symlink
+   fails immediately at the system call boundary with C<ELOOP>, preventing symlink
+   traversal races without requiring prior C<lstat> checks.
+2. C<O_NONBLOCK> ensures opening special files (such as named pipes / FIFOs) does not block
+   indefinitely waiting for a writer.
+3. Close-on-exec (C<FD_CLOEXEC>) is enforced on the descriptor immediately upon opening.
+4. Once opened, the file descriptor itself is validated via C<fstat> (Perl C<stat($fh)>).
+   Directories (C<S_ISDIR>) and non-regular files (FIFOs, character/block devices, sockets)
+   are rejected before any read operations occur.
+5. Content is streamed into SHA-256 via C<sysread> on the verified descriptor.
+6. A post-read C<fstat> check is performed on the same descriptor, comparing file size,
+   modification time (mtime), device ID, and inode number against the pre-read metadata.
+   If any property changed during reading, a concurrent modification warning is issued.
+
+=head1 CONCURRENCY LIMITATIONS
+
+While open-time no-follow, descriptor-based fstat validation, and pre/post-read stat comparisons
+prevent symlink redirection and detect size/mtime modifications, callers must note:
+- Operating systems do not guarantee file data block read atomicity across multi-chunk reads
+  without exclusive mandatory filesystem locks (which are deprecated and fragile).
+- Modifications in-place that preserve exact byte length and occur within the timestamp
+  granularity of the filesystem (or where mtime is restored) cannot be detected by stat alone.
+- Atomic snapshots require filesystem-level or volume-level snapshots (e.g. LVM/btrfs/ZFS).
+
+=cut
 
 sub hash_file {
     my (%args) = @_;
@@ -22,43 +61,64 @@ sub hash_file {
         return (undef, { error => "Unsupported hashing algorithm: $algo. Only sha256 is supported.", code => 2 });
     }
 
-    # Inspect path with lstat to examine symlink state without following immediately
-    my @lstat_info = lstat($path);
-    unless (@lstat_info) {
-        return (undef, { error => "Cannot stat '$path': $!", code => 3 });
-    }
+    # Open-time no-follow and non-blocking open to eliminate TOCTOU races
+    my $flags = O_RDONLY | O_NOFOLLOW | O_NONBLOCK;
+    my $opened = sysopen(my $fh, $path, $flags);
 
-    my $is_symlink = S_ISLNK($lstat_info[2]);
-    my $symlink_target = undef;
-
-    if ($is_symlink) {
-        $symlink_target = readlink($path);
-        unless (defined $symlink_target) {
-            return (undef, { error => "Cannot read symlink '$path': $!", code => 3 });
+    unless ($opened) {
+        my $err_num = $!;
+        if ($err_num == ELOOP) {
+            return (undef, {
+                error => "Cannot hash symlink '$path': symlinks are rejected by security policy",
+                code  => 2,
+            });
         }
+        return (undef, {
+            error => "Cannot open file '$path': $err_num",
+            code  => 3,
+        });
     }
 
-    # Verify if target path is a directory
-    if (-d $path) {
-        return (undef, { error => "Cannot hash directory: '$path'", code => 2 });
-    }
+    # Set close-on-exec on descriptor
+    fcntl($fh, F_SETFD, FD_CLOEXEC);
 
-    # Check target stat
-    my @initial_stat = stat($path);
+    # Inspect file descriptor metadata directly via fstat
+    my @initial_stat = stat($fh);
     unless (@initial_stat) {
-        return (undef, { error => "Cannot access target file '$path': $!", code => 3 });
+        my $stat_err = $!;
+        close($fh);
+        return (undef, {
+            error => "Cannot fstat opened file '$path': $stat_err",
+            code  => 3,
+        });
     }
 
+    my $initial_dev   = $initial_stat[0];
+    my $initial_ino   = $initial_stat[1];
+    my $mode_val      = $initial_stat[2];
     my $initial_size  = $initial_stat[7];
     my $initial_mtime = $initial_stat[9];
-    my $initial_mode  = sprintf("0%o", $initial_stat[2] & 07777);
+    my $initial_mode  = sprintf("0%o", $mode_val & 07777);
 
-    # Open file for raw binary streaming read
-    my $fh;
-    unless (open($fh, '<:raw', $path)) {
-        return (undef, { error => "Cannot open file '$path': $!", code => 3 });
+    # Reject directories
+    if (S_ISDIR($mode_val)) {
+        close($fh);
+        return (undef, {
+            error => "Cannot hash directory: '$path'",
+            code  => 2,
+        });
     }
 
+    # Reject non-regular files (FIFOs, devices, sockets)
+    unless (S_ISREG($mode_val)) {
+        close($fh);
+        return (undef, {
+            error => "Cannot hash non-regular file: '$path'",
+            code  => 2,
+        });
+    }
+
+    # Stream SHA-256 calculation directly from the verified file descriptor
     my $sha = Digest::SHA->new(256);
     my $bytes_read_total = 0;
     my $buffer;
@@ -66,9 +126,12 @@ sub hash_file {
     while (1) {
         my $read_bytes = sysread($fh, $buffer, CHUNK_SIZE);
         unless (defined $read_bytes) {
-            my $err = $!;
+            my $read_err = $!;
             close($fh);
-            return (undef, { error => "Error reading file '$path': $err", code => 3 });
+            return (undef, {
+                error => "Error reading file '$path': $read_err",
+                code  => 3,
+            });
         }
         last if $read_bytes == 0; # EOF
 
@@ -76,15 +139,33 @@ sub hash_file {
         $bytes_read_total += $read_bytes;
     }
 
-    close($fh);
+    # Optional test hook for deterministic concurrent modification simulation
+    if ($args{_post_read_hook}) {
+        $args{_post_read_hook}->($fh, $path);
+    }
 
-    # Post-read stat check to detect concurrent modification during reading
-    my @final_stat = stat($path);
+    # Post-read stat check on the same descriptor
+    my @final_stat = stat($fh);
     my $modified_during_read = 0;
+
     if (@final_stat) {
-        if ($final_stat[7] != $initial_size || $final_stat[9] != $initial_mtime) {
+        if ($final_stat[0] != $initial_dev ||
+            $final_stat[1] != $initial_ino ||
+            $final_stat[7] != $initial_size ||
+            $final_stat[9] != $initial_mtime) {
             $modified_during_read = 1;
         }
+    } else {
+        $modified_during_read = 1;
+    }
+
+    # Close file handle and check for close error
+    unless (close($fh)) {
+        my $close_err = $!;
+        return (undef, {
+            error => "Error closing file '$path': $close_err",
+            code  => 3,
+        });
     }
 
     my $digest = $sha->hexdigest;
@@ -96,16 +177,14 @@ sub hash_file {
         size_bytes           => $bytes_read_total,
         mode                 => $initial_mode,
         modified_epoch       => $initial_mtime,
-        is_symlink           => $is_symlink ? JSON::PP::true : JSON::PP::false,
         modified_during_read => $modified_during_read ? JSON::PP::true : JSON::PP::false,
     };
 
-    if ($is_symlink && defined $symlink_target) {
-        $result->{symlink_target} = $symlink_target;
-    }
-
     if ($modified_during_read) {
-        return ($result, { warning => "File was modified concurrently during read", code => 1 });
+        return ($result, {
+            warning => "File was modified concurrently during read",
+            code    => 1,
+        });
     }
 
     return ($result, undef);

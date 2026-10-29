@@ -66,7 +66,7 @@ sub emit_output {
 
     if ($format eq 'json') {
         my $envelope = {
-            '$schema'        => 'https://lsa.security/schemas/envelope.v1.json',
+            '$schema'        => 'https://lsa.security/schemas/sec-ops.v1.json',
             schema_version  => '1.0.0',
             component       => 'sec-cli',
             command         => $command,
@@ -89,25 +89,27 @@ sub emit_output {
         }
 
         if ($command eq 'dns') {
-            print "Query: $data->{query}\n";
+            print "Query: $data->{query}\n" if defined $data->{query};
             print "Status: $status\n";
             if ($data->{resolved_ips} && @{$data->{resolved_ips}}) {
                 print "Resolved IPs: " . join(", ", @{$data->{resolved_ips}}) . "\n";
             }
             print "Duration: $data->{duration_ms} ms\n" if defined $data->{duration_ms};
         } elsif ($command eq 'tcp-check') {
-            print "Target: $data->{target_host}:$data->{port}\n";
-            print "Reachable: " . ($data->{reachable} ? "yes" : "no") . "\n";
+            print "Target: $data->{target_host}:$data->{port}\n" if defined $data->{target_host};
+            print "Reachable: " . ($data->{reachable} ? "yes" : "no") . "\n" if defined $data->{reachable};
             print "Latency: $data->{latency_ms} ms\n" if defined $data->{latency_ms};
             print "Status: $status\n";
         } elsif ($command eq 'hash') {
-            print "File: $data->{file_path}\n";
-            print "Algorithm: $data->{algorithm}\n";
-            print "Hash: $data->{hash}\n";
-            print "Size: $data->{size_bytes} bytes\n";
+            print "File: $data->{file_path}\n" if defined $data->{file_path};
+            print "Algorithm: $data->{algorithm}\n" if defined $data->{algorithm};
+            print "Hash: $data->{hash}\n" if defined $data->{hash};
+            print "Size: $data->{size_bytes} bytes\n" if defined $data->{size_bytes};
             print "Mode: $data->{mode}\n" if defined $data->{mode};
         } elsif ($command eq 'log') {
-            print LSA::SecEng::Logger::format_json($data) . "\n";
+            if ($data->{timestamp} && $data->{level} && $data->{message}) {
+                print "[$data->{timestamp}] [$data->{level}] $data->{message}\n";
+            }
         }
     }
 
@@ -205,6 +207,18 @@ if ($command eq 'dns') {
         );
     }
 
+    if (@ARGV) {
+        my $extra = join(" ", @ARGV);
+        emit_output(
+            format      => $format,
+            command     => 'dns',
+            target_host => $hostname,
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Unexpected extra argument: '$extra'"],
+        );
+    }
+
     my ($res, $err_info) = LSA::SecEng::DNS::resolve_dns(
         hostname => $hostname,
         timeout  => $timeout,
@@ -247,6 +261,18 @@ if ($command eq 'dns') {
         );
     }
 
+    if (@ARGV) {
+        my $extra = join(" ", @ARGV);
+        emit_output(
+            format      => $format,
+            command     => 'tcp-check',
+            target_host => $host,
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Unexpected extra argument: '$extra'"],
+        );
+    }
+
     my ($res, $err_info) = LSA::SecEng::TCP::check_tcp(
         host    => $host,
         port    => $port,
@@ -286,6 +312,18 @@ if ($command eq 'dns') {
             status      => 'error',
             exit_code   => 2,
             errors      => ["Usage: sec-cli hash <file> [--format json|text]"],
+        );
+    }
+
+    if (@ARGV) {
+        my $extra = join(" ", @ARGV);
+        emit_output(
+            format      => $format,
+            command     => 'hash',
+            target_host => 'localhost',
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Unexpected extra argument: '$extra'"],
         );
     }
 
@@ -339,7 +377,19 @@ if ($command eq 'dns') {
             target_host => 'localhost',
             status      => 'error',
             exit_code   => 2,
-            errors      => ["Usage: sec-cli log <message> [--level info|warn|error] [--context json]"],
+            errors      => ["Usage: sec-cli log <message> [--level info|warn|error] [--context json] [--format json|text]"],
+        );
+    }
+
+    if (@ARGV) {
+        my $extra = join(" ", @ARGV);
+        emit_output(
+            format      => $format,
+            command     => 'log',
+            target_host => 'localhost',
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Unexpected extra argument: '$extra'"],
         );
     }
 
@@ -376,9 +426,15 @@ if ($command eq 'dns') {
         );
     }
 
-    # Output structured log line
-    print LSA::SecEng::Logger::format_json($log_entry) . "\n";
-    exit(0);
+    emit_output(
+        format      => $format,
+        command     => 'log',
+        target_host => 'localhost',
+        status      => 'success',
+        exit_code   => 0,
+        data        => $log_entry,
+        errors      => [],
+    );
 
 } else {
     emit_output(

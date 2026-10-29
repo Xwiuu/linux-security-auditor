@@ -21,6 +21,10 @@ Consequently, application timeout requests cannot guarantee a hard deadline
 across all operating environments without asynchronous low-level resolver
 subsystems. This limitation is explicitly acknowledged per strict YAGNI.
 
+To prevent signal handler leaks, C<$SIG{ALRM}> is localized strictly within the
+execution scope of C<eval>, and C<alarm(0)> is invoked immediately upon exiting
+the protected block.
+
 =cut
 
 sub validate_hostname {
@@ -66,29 +70,35 @@ sub resolve_dns {
     my $start_time = time();
     my ($err, @res);
     my $timed_out = 0;
+    my $eval_err;
 
     eval {
         local $SIG{ALRM} = sub { $timed_out = 1; die "RESOLVER_TIMEOUT\n"; };
-        # Schedule integer second alarm if positive
         my $alarm_secs = int($timeout + 0.999);
         alarm($alarm_secs > 0 ? $alarm_secs : 1);
 
-        ($err, @res) = getaddrinfo(
-            $hostname,
-            undef,
-            {
-                family   => AF_UNSPEC,
-                socktype => SOCK_STREAM,
-            }
-        );
+        if ($args{_getaddrinfo_fn}) {
+            ($err, @res) = $args{_getaddrinfo_fn}->($hostname);
+        } else {
+            ($err, @res) = getaddrinfo(
+                $hostname,
+                undef,
+                {
+                    family   => AF_UNSPEC,
+                    socktype => SOCK_STREAM,
+                }
+            );
+        }
 
         alarm(0);
     };
-    alarm(0); # Ensure alarm reset
+    $eval_err = $@;
+    alarm(0); # Guarantee alarm cancellation immediately outside eval
 
     my $elapsed_ms = sprintf("%.2f", (time() - $start_time) * 1000.0);
 
-    if ($timed_out || ($@ && $@ =~ /RESOLVER_TIMEOUT/)) {
+    # Case 1: Established timeout event
+    if ($timed_out || ($eval_err && $eval_err =~ /RESOLVER_TIMEOUT/)) {
         return (
             {
                 query             => $hostname,
@@ -105,6 +115,26 @@ sub resolve_dns {
         );
     }
 
+    # Case 2: Unexpected exception thrown during resolution
+    if ($eval_err) {
+        chomp($eval_err);
+        return (
+            {
+                query             => $hostname,
+                record_type       => 'A/AAAA',
+                resolved_ips      => [],
+                duration_ms       => $elapsed_ms + 0.0,
+                timeout_requested => $timeout + 0.0,
+            },
+            {
+                error  => "Unexpected resolver exception: $eval_err",
+                code   => 3,
+                status => 'error',
+            }
+        );
+    }
+
+    # Case 3: Resolver returned an error code from getaddrinfo
     if ($err) {
         return (
             {
@@ -122,6 +152,7 @@ sub resolve_dns {
         );
     }
 
+    # Case 4: Resolution succeeded
     my %unique_ips;
     for my $ai (@res) {
         my ($ni_err, $ip) = getnameinfo($ai->{addr}, NI_NUMERICHOST);
