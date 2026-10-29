@@ -94,7 +94,21 @@ The analysis strictly differentiates between:
   - *Risk:* Expectation that DNS queries terminate on hard deadlines despite blocking system resolver calls.
   - *Mitigation:* Explicitly document that resolver timeouts are implementation-dependent; do not promise guaranteed deadlines without low-level asynchronous resolver support.
 
-### 3.2. Docker Socket Access Risks (CR-01)
+### 3.2. File Integrity & Baseline Verification (`sec-cli`, Sprint 02)
+- **Threat: Path Traversal via Malicious Baseline Entries**
+  - *Risk:* Crafted baseline JSON containing `../` traversal or absolute paths tricking verification into auditing or referencing arbitrary host paths.
+  - *Mitigation:* Strict validation of relative paths rejecting `../`, `..\`, absolute prefixes, and null bytes.
+- **Threat: Directory Loops & Recursive Traversal Denial of Service**
+  - *Risk:* Symlink loops, deeply nested trees, or cyclic bind mounts exhausting stack or file handles during inventory.
+  - *Mitigation:* Never follow directory symlinks; track visited directories by `(dev, ino)` to detect cycles; enforce depth limit (64) and inventory limit (100,000 files).
+- **Threat: Baseline Containment Feedback Loop & Tampering**
+  - *Risk:* Output baseline file stored inside the audited directory tree, creating self-referential modifications or truncation.
+  - *Mitigation:* Canonical path verification rejecting baseline output paths located inside the audited tree. Atomic write to temporary file with restrictive permissions (`0600`) and atomic `rename`. Protection against accidental overwrite without explicit `--force`.
+- **Threat: False Sense of Security (Untrusted Initial State)**
+  - *Risk:* Assuming a baseline represents a clean, secure system rather than merely a reference point.
+  - *Mitigation:* Document explicitly that baselines prove change detection, not initial integrity. Users must protect baseline files using external controls (read-only storage, digital signatures, off-host backups).
+
+### 3.3. Docker Socket Access Risks (CR-01)
 - **Threat: Container Escape / Host Compromise via Docker Socket**
   - *Risk:* Access to `/var/run/docker.sock` provides root-equivalent control over the host operating system. A process with read/write access to this socket can create privileged containers, mount the host root filesystem, and execute arbitrary code as root.
   - *Critical Security Boundary Distinction:*
@@ -150,7 +164,10 @@ The analysis strictly differentiates between:
 | **THREAT-05** | Perl | Shell injection in `sec-cli` | High | Sprint 01 | Enforce array-based process execution (`execve`) |
 | **THREAT-06** | Perl | SSRF / internal scanning via `tcp-check` | Medium | Sprint 01 | Whitelist protocols, reject metadata IPs |
 | **THREAT-07** | Perl | Unhandled blocking resolver deadlines in `dns` | Medium | Sprint 01 | Document implementation-dependent timeout |
-| **THREAT-08** | Rust (Tentative) | Host takeover via Docker socket | Critical | Future Prerequisite | Enforced OS proxy / isolated least-privilege boundary |
-| **THREAT-09** | Rust (Tentative) | BOLA / Privilege escalation in backend | High | Future Backend Phase | Tenant-isolated SQL queries + RBAC guards |
-| **THREAT-10** | WASM (Tentative) | Stored XSS in audit dashboard | High | Future UI Phase | Framework auto-escaping + Strict CSP headers |
-| **THREAT-11** | Backend (Tentative) | Resource exhaustion via oversized JSON | Medium | Future Backend Phase | 10MB payload limit + JSON Schema validator |
+| **THREAT-08** | Perl | Path traversal via malicious baseline JSON | High | Sprint 02 | Strict relative path validation, reject `../` and absolute paths |
+| **THREAT-09** | Perl | Baseline containment loop / self-overwriting | Medium | Sprint 02 | Tree containment check, atomic 0600 write, no silent overwrite |
+| **THREAT-10** | Perl | Traversal cycles / unbounded tree DoS | Medium | Sprint 02 | No symlink following, `(dev, ino)` cycle check, recursion bounds |
+| **THREAT-11** | Rust (Tentative) | Host takeover via Docker socket | Critical | Future Prerequisite | Enforced OS proxy / isolated least-privilege boundary |
+| **THREAT-12** | Rust (Tentative) | BOLA / Privilege escalation in backend | High | Future Backend Phase | Tenant-isolated SQL queries + RBAC guards |
+| **THREAT-13** | WASM (Tentative) | Stored XSS in audit dashboard | High | Future UI Phase | Framework auto-escaping + Strict CSP headers |
+| **THREAT-14** | Backend (Tentative) | Resource exhaustion via oversized JSON | Medium | Future Backend Phase | 10MB payload limit + JSON Schema validator |
