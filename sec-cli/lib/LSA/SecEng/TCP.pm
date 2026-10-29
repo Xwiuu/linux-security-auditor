@@ -5,7 +5,7 @@ use warnings;
 use IO::Socket::IP;
 use POSIX qw(:errno_h strerror);
 use Socket qw(SOL_SOCKET SO_ERROR);
-use Time::HiRes qw(time);
+use Time::HiRes qw(time clock_gettime CLOCK_MONOTONIC);
 use JSON::PP;
 
 our $VERSION = '1.0.0';
@@ -25,6 +25,11 @@ and do not strictly bound synchronous upstream DNS lookup latency prior to socke
 Callers requiring bounded DNS resolution should resolve hostnames beforehand using C<resolve_dns>.
 
 =cut
+
+sub _get_monotonic_time {
+    my $m = eval { clock_gettime(CLOCK_MONOTONIC) };
+    return defined $m ? $m : time();
+}
 
 sub validate_target_host {
     my ($host) = @_;
@@ -70,7 +75,10 @@ sub check_tcp {
     $clean_host =~ s/^\[//;
     $clean_host =~ s/\]$//;
 
-    my $start_time = time();
+    my $clock_fn = $args{_clock_fn} || \&_get_monotonic_time;
+    my $start_monotonic = $clock_fn->();
+    my $start_wall = time(); # used for user-facing latency_ms
+    my $deadline = $start_monotonic + $timeout;
 
     # Attempt non-blocking connection
     my $sock = IO::Socket::IP->new(
@@ -103,39 +111,44 @@ sub check_tcp {
         return (undef, { error => "Invalid socket file descriptor", code => 3 });
     }
 
-    # Bounded select loop with EINTR retry and remaining timeout calculation
-    my $rem_timeout = $timeout;
+    # Monotonic deadline enforcement in select loop (Sprint 01B FIX-02)
+    # Remaining time is calculated directly from monotonic deadline on every iteration,
+    # ensuring signal interruptions (EINTR) do not suffer from interval subtraction drift.
     my $nfound;
+    my $select_err;
 
     while (1) {
+        my $now_mono = $clock_fn->();
+        my $remaining = $deadline - $now_mono;
+
+        if ($remaining <= 0) {
+            # Monotonic deadline exhausted
+            $nfound = 0;
+            last;
+        }
+
         my $wvec = "";
         vec($wvec, $fileno, 1) = 1;
         my $rvec = $wvec;
 
-        my $iter_start = time();
         $nfound = $args{_select_fn}
-            ? $args{_select_fn}->($rvec, $wvec, undef, $rem_timeout)
-            : select($rvec, $wvec, undef, $rem_timeout);
-        my $select_err = $!;
+            ? $args{_select_fn}->($rvec, $wvec, undef, $remaining)
+            : select($rvec, $wvec, undef, $remaining);
+        $select_err = $!;
 
         if (defined $nfound && $nfound > 0) {
             last; # Socket ready for read/write
         } elsif (defined $nfound && $nfound == 0) {
-            last; # Timed out
+            last; # select call timed out
         } else {
             # select returned undef / error (< 0)
             if ($select_err == EINTR) {
-                my $spent = time() - $iter_start;
-                $rem_timeout -= $spent;
-                if ($rem_timeout <= 0) {
-                    $nfound = 0; # Expired while interrupted
-                    last;
-                }
-                next; # Retry with remaining duration
+                # Signal interruption: loop back and evaluate remaining monotonic deadline
+                next;
             } else {
-                # Non-recoverable select failure
+                # Genuine select system call failure (EBADF, EINVAL, etc.)
                 close($sock);
-                my $elapsed_ms = sprintf("%.2f", (time() - $start_time) * 1000.0);
+                my $elapsed_ms = sprintf("%.2f", (time() - $start_wall) * 1000.0);
                 return (
                     {
                         target_host     => $host,
@@ -154,7 +167,7 @@ sub check_tcp {
         }
     }
 
-    my $elapsed_ms = sprintf("%.2f", (time() - $start_time) * 1000.0);
+    my $elapsed_ms = sprintf("%.2f", (time() - $start_wall) * 1000.0);
 
     if ($nfound == 0) {
         close($sock);

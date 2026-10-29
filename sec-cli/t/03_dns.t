@@ -54,7 +54,7 @@ is($err_err->{code}, 3, "Non-existent RFC 6761 .invalid domain returns exit code
 is($err_err->{status}, 'error', "Status is error for unresolvable host");
 like($err_err->{error}, qr/DNS resolution failed/, "Error message correctly formatted");
 
-# 5. Unexpected Exception Handling (Sprint 01A FIX-06: distinguish eval exception from resolver error)
+# 5. Unexpected Exception Handling (General exception)
 my ($res_exc, $err_exc) = LSA::SecEng::DNS::resolve_dns(
     hostname           => 'localhost',
     _getaddrinfo_fn    => sub {
@@ -63,20 +63,36 @@ my ($res_exc, $err_exc) = LSA::SecEng::DNS::resolve_dns(
 );
 
 ok(defined $err_exc, "Unexpected exception returns error info");
-is($err_exc->{code}, 3, "Unexpected exception exits with code 3 (not success, not timeout)");
+is($err_exc->{code}, 3, "Unexpected exception exits with code 3");
 is($err_exc->{status}, 'error', "Status is 'error' on unexpected exception");
 like($err_exc->{error}, qr/Unexpected resolver exception: Simulated internal resolver crash/, "Exception message captured without reporting success");
 
-# 6. Established Timeout Simulation (Sprint 01A FIX-06: exit code 124 strictly for established timeout)
-my ($res_to, $err_to) = LSA::SecEng::DNS::resolve_dns(
-    hostname           => 'localhost',
-    _getaddrinfo_fn    => sub {
-        die "RESOLVER_TIMEOUT\n";
+# 6. Sprint 01B FIX-01: Generic exception carrying marker text must NOT be classified as timeout
+# A die carrying 'RESOLVER_TIMEOUT' without the alarm handler firing must return code 3 (error), NOT code 124.
+my ($res_marker, $err_marker) = LSA::SecEng::DNS::resolve_dns(
+    hostname        => 'localhost',
+    _getaddrinfo_fn => sub {
+        die "RESOLVER_TIMEOUT\n"; # Generic exception imitating timeout marker
     },
 );
 
-ok(defined $err_to, "Established timeout returns error info");
-is($err_to->{code}, 124, "Timeout exits strictly with code 124");
+ok(defined $err_marker, "Marker-mimicking exception returns error info");
+is($err_marker->{code}, 3, "Marker-mimicking exception without handler invocation returns code 3 (not timeout 124)");
+is($err_marker->{status}, 'error', "Status is 'error' for marker-mimicking exception");
+like($err_marker->{error}, qr/Unexpected resolver exception: RESOLVER_TIMEOUT/, "Captured as unexpected resolver exception");
+
+# 7. Sprint 01B FIX-01: Actual timeout handler invocation
+# Delivery of SIGALRM triggers the localized handler, which sets $timed_out = 1, correctly classifying as timeout (124).
+my ($res_to, $err_to) = LSA::SecEng::DNS::resolve_dns(
+    hostname        => 'localhost',
+    _getaddrinfo_fn => sub {
+        kill('ALRM', $$); # Actually invoke the installed SIGALRM handler
+        sleep 1;
+    },
+);
+
+ok(defined $err_to, "Actual timeout handler invocation returns error info");
+is($err_to->{code}, 124, "Timeout exits strictly with code 124 when handler was invoked");
 is($err_to->{status}, 'timeout', "Status is 'timeout'");
 like($err_to->{error}, qr/timed out/, "Error describes timeout event");
 

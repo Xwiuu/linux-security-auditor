@@ -79,8 +79,19 @@ sub hash_file {
         });
     }
 
-    # Set close-on-exec on descriptor
-    fcntl($fh, F_SETFD, FD_CLOEXEC);
+    # Set close-on-exec on descriptor and verify result (Sprint 01B FIX-03)
+    my $fcntl_ok = $args{_fcntl_fn}
+        ? $args{_fcntl_fn}->($fh, F_SETFD, FD_CLOEXEC)
+        : fcntl($fh, F_SETFD, FD_CLOEXEC);
+
+    unless ($fcntl_ok) {
+        my $fcntl_err = $!;
+        close($fh);
+        return (undef, {
+            error => "Failed to set FD_CLOEXEC on opened descriptor for '$path': $fcntl_err",
+            code  => 3,
+        });
+    }
 
     # Inspect file descriptor metadata directly via fstat
     my @initial_stat = stat($fh);

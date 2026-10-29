@@ -21,9 +21,16 @@ Consequently, application timeout requests cannot guarantee a hard deadline
 across all operating environments without asynchronous low-level resolver
 subsystems. This limitation is explicitly acknowledged per strict YAGNI.
 
-To prevent signal handler leaks, C<$SIG{ALRM}> is localized strictly within the
-execution scope of C<eval>, and C<alarm(0)> is invoked immediately upon exiting
-the protected block.
+=head1 TIMER OWNERSHIP LIMITATIONS
+
+POSIX systems provide a single process-wide interval timer via C<alarm(2)>.
+Calling C<resolve_dns> installs a localized C<$SIG{ALRM}> handler and arms
+C<alarm>. Callers must note that C<resolve_dns> assumes exclusive ownership of
+C<alarm> and C<$SIG{ALRM}> for the duration of the call. Any pre-existing alarm
+scheduled by the calling process will be overwritten. To prevent signal handler
+and timer leaks into calling scopes, C<$SIG{ALRM}> is strictly localized to the
+C<eval> scope, and C<alarm(0)> is unconditionally invoked upon exiting the
+protected block.
 
 =cut
 
@@ -93,12 +100,14 @@ sub resolve_dns {
         alarm(0);
     };
     $eval_err = $@;
-    alarm(0); # Guarantee alarm cancellation immediately outside eval
+    alarm(0); # Guarantee alarm cancellation immediately outside eval scope
 
     my $elapsed_ms = sprintf("%.2f", (time() - $start_time) * 1000.0);
 
-    # Case 1: Established timeout event
-    if ($timed_out || ($eval_err && $eval_err =~ /RESOLVER_TIMEOUT/)) {
+    # Case 1: Established timeout event (Sprint 01B FIX-01)
+    # Timeout is classified EXCLUSIVELY by the state variable ($timed_out) set by the actual
+    # SIGALRM handler, preventing generic exceptions carrying the marker text from being misclassified.
+    if ($timed_out) {
         return (
             {
                 query             => $hostname,
@@ -116,6 +125,8 @@ sub resolve_dns {
     }
 
     # Case 2: Unexpected exception thrown during resolution
+    # Any exception occurring without $timed_out being set by the alarm handler is treated as an
+    # unexpected environmental error (code 3), even if the exception message contains "RESOLVER_TIMEOUT".
     if ($eval_err) {
         chomp($eval_err);
         return (

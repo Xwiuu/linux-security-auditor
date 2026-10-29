@@ -135,4 +135,18 @@ is($err_concur->{code}, 1, "Exit code 1 returned on concurrent modification");
 like($err_concur->{warning}, qr/modified concurrently/, "Warning message explains modification");
 is($res_concur->{modified_during_read}, JSON::PP::true, "modified_during_read flag is true");
 
+# 12. Sprint 01B FIX-03: Deterministic descriptor setup failure (fcntl FD_CLOEXEC failure)
+my ($res_fcntl_fail, $err_fcntl_fail) = LSA::SecEng::Hash::hash_file(
+    path      => $empty_file,
+    _fcntl_fn => sub {
+        $! = POSIX::EINVAL;
+        return 0; # Simulate fcntl failure
+    },
+);
+
+is($res_fcntl_fail, undef, "Descriptor setup failure returns undef result");
+ok(defined $err_fcntl_fail, "Descriptor setup failure returns error info");
+is($err_fcntl_fail->{code}, 3, "Descriptor setup failure returns environmental error code 3");
+like($err_fcntl_fail->{error}, qr/Failed to set FD_CLOEXEC/, "Error explains FD_CLOEXEC failure");
+
 done_testing();
