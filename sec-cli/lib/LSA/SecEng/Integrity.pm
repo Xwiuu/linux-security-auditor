@@ -4,10 +4,11 @@ use strict;
 use warnings;
 use Cwd qw(realpath);
 use Digest::SHA qw(sha256_hex);
-use Errno qw(ELOOP EEXIST ENOENT EACCES EPERM);
+use Errno qw(ELOOP EEXIST ENOENT EACCES EPERM EIO);
 use Fcntl qw(O_RDONLY O_WRONLY O_CREAT O_EXCL O_NOFOLLOW O_NONBLOCK :mode);
 use File::Basename qw(dirname basename);
 use File::Spec;
+use IO::Handle;
 use JSON::PP;
 use POSIX qw(:errno_h);
 
@@ -33,37 +34,50 @@ reference verification (C<verify_baseline>) for the Security Engineering CLI.
 =head2 SECURITY CONTROLS & ASSUMPTIONS
 
 1. B<Read-Only Inspection:> Audited directories and files are never modified.
-2. B<Symlink Safety Policy:> Directory symlinks are never followed to avoid
-   directory traversal escapes and filesystem cycles. Symlinks in the target
-   tree are explicitly tracked as inventory findings and verified.
+2. B<Symlink Safety Policy (FIX-02, FIX-04):> Directory symlinks are never followed
+   during traversal or hashing to prevent filesystem cycles and escapes. Symlinks
+   in the target tree are explicitly tracked with their identity and link target,
+   and compared deterministically across baseline and live filesystem state.
+   External symlink targets are never scanned, and broken symlinks within the
+   audited tree are recorded consistently without dereferencing.
 3. B<Containment Verification:> The baseline output file cannot be placed inside
    the audited tree, preventing self-referential baseline poisoning and feedback loops.
 4. B<Incomplete Baseline Protection (FIX-01):> Baselines are never written, published,
    or overwritten if any traversal error, unreadable path, cycle, or concurrent
    modification occurs during inventory. The entire snapshot must be 100% complete.
-5. B<Atomic No-Replace Publication (FIX-04):> Baselines are written to an exclusive
-   temporary file in the destination directory with restrictive permissions (0600),
-   flushed via fsync, and published using atomic no-replace link(2). If the destination
-   already exists and --force is not specified, publication fails without truncating
-   the pre-existing file. Temporary files are unconditionally cleaned up on failure.
-6. B<Directory Traversal Race Protection (FIX-03):> Traversal verifies directory
-   descriptors (fstat on dirhandle vs lstat on path) to detect replacement races,
-   fails closed if dev/ino mismatches, and enforces root containment.
-7. B<Bounded Baseline Input & Schema Validation (FIX-05):> Verification opens
-   baseline files using O_NOFOLLOW, validates descriptor metadata, enforces a 50MB
-   size limit and 100k entry limit, validates header file_count, and rejects unsafe,
-   non-canonical, or traversal relative paths (e.g. '.', '..', empty components).
-8. B<Verification Correctness (FIX-06):> Inaccessible directories never produce
-   false REMOVED findings. Concurrent modifications invalidate clean success.
+5. B<Atomic No-Replace Publication & Durability (FIX-03, FIX-04):> Baselines are written
+   to an exclusive temporary file in the destination directory with restrictive permissions
+   (0600), flushed and synchronized to hardware storage using descriptor synchronization
+   (C<IO::Handle::sync()>), and published using atomic no-replace link(2). If the destination
+   already exists and --force is not specified, publication fails without truncating the
+   pre-existing file. Destination directory entries are synchronized where supported.
+   If file synchronization fails, publication aborts and temporary files are unlinked.
+6. B<Directory Traversal Race Protection (FIX-03, FIX-04):> Traversal verifies directory
+   descriptors (fstat on dirhandle vs lstat on path) to detect replacement races, fails closed
+   if dev/ino mismatches, and enforces directory containment.
+7. B<Bounded Baseline Input & Strict Schema (FIX-05):> Verification opens baseline files using
+   O_NOFOLLOW | O_NONBLOCK, validates descriptor metadata via fstat, enforces a 50MB size limit
+   and 100k entry limit, validates mandatory header fields including nonnegative integer file_count
+   matching the files array length, validates symlinks array, enforces unique path identities
+   across entry types, and rejects non-canonical or traversal paths (e.g. '.', '..', empty components).
+8. B<Verification Correctness & Incomplete Scan Rejection (FIX-01, FIX-06):> Every inspection failure,
+   unsupported non-regular file (FIFO/socket), or inaccessible directory is incorporated as an
+   explicit ERROR finding. Verification summary counts strictly match emitted findings. If any
+   inspection error occurs, verification returns exit code 3 and never exit code 0.
 
 =head1 KNOWN LIMITATIONS
 
 A baseline is a cryptographic integrity reference, not proof that the initial system
 state was untampered or secure. Users must protect stored baseline files with external
 integrity mechanisms (e.g. read-only mounts, digital signatures, or remote storage).
-Under POSIX without kernel openat2 RESOLVE_NO_SYMLINKS, directory replacement races
-on the same filesystem cannot be eliminated with 100% kernel atomicity; the engine
-fails closed upon detecting any descriptor metadata discrepancy.
+Under POSIX without kernel-level atomic path resolution (such as openat2 RESOLVE_NO_SYMLINKS),
+userland path traversal cannot completely eliminate theoretical TOCTOU races between path
+inspection and descriptor acquisition. The engine minimizes this window via O_NOFOLLOW | O_NONBLOCK,
+descriptor verification (fstat on opendir handles and file handles), and fails closed upon
+detecting any discrepancy. Furthermore, crash durability across power loss requires filesystem
+and hardware support for fsync on both files and directories; if directory fsync is unsupported
+by the underlying filesystem, atomic publication succeeds but durable directory entry persistence
+cannot be guaranteed.
 
 =cut
 
@@ -77,7 +91,7 @@ sub is_path_inside_directory {
     my $real_parent = realpath($parent);
     return 0 unless defined $real_parent;
 
-    my $real_file = realpath($file_path);
+    my $real_file = -l $file_path ? undef : realpath($file_path);
     my $check_path = defined $real_file
         ? $real_file
         : File::Spec->catfile($real_parent, basename($file_path));
@@ -216,15 +230,6 @@ sub _scan_directory {
         my $rel_path   = File::Spec->abs2rel($child_path, $root_dir);
         $rel_path =~ s{\\}{/}g; # Normalize path separator
 
-        # Root containment check
-        unless (is_path_inside_directory($child_path, $root_dir) || $child_path eq $root_dir) {
-            push @$errors_list, {
-                path  => $child_path,
-                error => "Directory traversal escaped root boundary: '$child_path'",
-            };
-            next;
-        }
-
         my @child_stat = lstat($child_path);
         unless (@child_stat) {
             my $err = $!;
@@ -238,17 +243,36 @@ sub _scan_directory {
         my $mode = $child_stat[2];
 
         if (S_ISLNK($mode)) {
-            # FIX-02: Explicitly track symlinks instead of silently ignoring
-            my $target = eval { readlink($child_path) };
+            # FIX-02, FIX-04: Explicitly track symlinks without following.
+            # External targets and broken symlinks are recorded by identity and target string.
+            my $target = readlink($child_path);
+            unless (defined $target) {
+                my $err = $!;
+                push @$errors_list, {
+                    path  => $child_path,
+                    error => "Cannot readlink symbolic link: $err",
+                };
+                next;
+            }
             push @$symlinks_list, {
                 path           => $rel_path,
-                symlink_target => defined $target ? $target : "",
+                symlink_target => $target,
                 mode           => sprintf("0%o", $mode & 07777),
                 mtime_epoch    => int($child_stat[9]),
             };
-            # Policy invariant: never follow symlinks
             next;
         } elsif (S_ISDIR($mode)) {
+            # Ensure subdirectory does not escape root boundary before descending
+            my $canon_child = realpath($child_path);
+            unless (defined $canon_child && (index($canon_child, $root_dir . '/') == 0 || $canon_child eq $root_dir)) {
+                push @$errors_list, {
+                    path  => $child_path,
+                    error => "Directory traversal escaped root boundary: '$child_path'",
+                };
+                $inaccessible_subtrees->{$child_path} = "Directory escaped root boundary";
+                next;
+            }
+
             _scan_directory(
                 root_dir              => $root_dir,
                 current_dir           => $child_path,
@@ -291,7 +315,7 @@ sub _scan_directory {
                 mtime_epoch => int($hash_res->{modified_epoch}),
             };
         } else {
-            # Non-regular file (FIFO, socket, device node)
+            # Non-regular file (FIFO, socket, device node) - unsupported
             push @$errors_list, {
                 path  => $child_path,
                 error => "Unsupported non-regular file encountered (FIFO/device/socket)",
@@ -469,8 +493,26 @@ sub init_baseline {
         return (undef, { error => "Failed to write baseline content: $err", code => 3 });
     }
 
-    # Guarantee crash durability on descriptor before closing
-    eval { POSIX::fsync(fileno($tmp_fh)) };
+    # FIX-03: Crash durability synchronization using IO::Handle::sync()
+    if ($args{_inject_fsync_fail}) {
+        close($tmp_fh);
+        unlink($tmp_filename);
+        return (undef, {
+            error => "File synchronization (fsync) failed for temporary baseline: Injected I/O error",
+            code  => 3,
+        });
+    }
+
+    my $sync_res = eval { $tmp_fh->sync() };
+    my $sync_err = $@ || $!;
+    if ($@ || !$sync_res) {
+        close($tmp_fh);
+        unlink($tmp_filename);
+        return (undef, {
+            error => "File synchronization (fsync) failed for temporary baseline: $sync_err",
+            code  => 3,
+        });
+    }
 
     unless (close($tmp_fh)) {
         my $err = $!;
@@ -509,10 +551,24 @@ sub init_baseline {
         }
     }
 
-    # Sync destination directory entry for durability
-    if (opendir(my $dir_dh, $canon_out_dir)) {
-        eval { POSIX::fsync(fileno($dir_dh)) };
-        closedir($dir_dh);
+    # FIX-03: Attempt directory synchronization for durable namespace entry
+    my $dir_synced = 0;
+    my $dir_sync_warning = undef;
+    if ($args{_inject_dir_fsync_fail}) {
+        $dir_sync_warning = "Directory synchronization failed: Injected directory sync failure";
+    } else {
+        if (sysopen(my $dir_fh, $canon_out_dir, O_RDONLY)) {
+            my $d_res = eval { $dir_fh->sync() };
+            if ($d_res) {
+                $dir_synced = 1;
+            } else {
+                my $d_err = $@ || $!;
+                $dir_sync_warning = "Directory synchronization not supported by filesystem or failed: $d_err";
+            }
+            close($dir_fh);
+        } else {
+            $dir_sync_warning = "Cannot open directory for synchronization: $!";
+        }
     }
 
     my $result_payload = {
@@ -523,7 +579,15 @@ sub init_baseline {
         symlinks_indexed    => scalar(@symlinks),
         directories_scanned => $state{directories_scanned},
         inaccessible_count  => 0,
+        durability          => {
+            file_synced      => JSON::PP::true,
+            directory_synced => $dir_synced ? JSON::PP::true : JSON::PP::false,
+            atomic_published => JSON::PP::true,
+        },
     };
+    if (defined $dir_sync_warning) {
+        $result_payload->{durability}->{directory_warning} = $dir_sync_warning;
+    }
 
     return ($result_payload, undef);
 }
@@ -615,42 +679,69 @@ sub verify_baseline {
         return (undef, { error => "Malformed baseline JSON in '$baseline_file': $@", code => 2 });
     }
 
-    # FIX-05: Reject unsupported schema versions
-    my $schema_version = $parsed_baseline->{schema_version};
-    unless (defined $schema_version && $schema_version eq '1.0.0') {
-        return (undef, {
-            error => "Unsupported baseline schema version: " . ($schema_version // 'missing'),
-            code  => 2,
-        });
-    }
-
-    my $baseline_files = $parsed_baseline->{files};
-    unless (defined $baseline_files && ref($baseline_files) eq 'ARRAY') {
-        return (undef, { error => "Baseline document missing 'files' array", code => 2 });
-    }
-
-    # FIX-05: Verify file_count matches entry count
-    if (defined $parsed_baseline->{file_count}) {
-        my $declared = int($parsed_baseline->{file_count});
-        my $actual   = scalar(@$baseline_files);
-        if ($declared != $actual) {
+    # FIX-05: Mandatory baseline fields
+    for my $req_field (qw(schema_version target_directory file_count files)) {
+        unless (exists $parsed_baseline->{$req_field} && defined $parsed_baseline->{$req_field}) {
             return (undef, {
-                error => "Baseline header file_count mismatch: declared $declared but contains $actual entries",
+                error => "Baseline document missing mandatory field: '$req_field'",
                 code  => 2,
             });
         }
     }
 
-    # FIX-05: Reject excessive entry counts
-    if (scalar(@$baseline_files) > MAX_BASELINE_ENTRIES) {
+    # FIX-05: Reject unsupported schema versions
+    my $schema_version = $parsed_baseline->{schema_version};
+    unless ($schema_version eq '1.0.0') {
         return (undef, {
-            error => "Baseline contains excessive entries exceeding limit (" . MAX_BASELINE_ENTRIES . ")",
+            error => "Unsupported baseline schema version: $schema_version",
             code  => 2,
         });
     }
 
-    # Validate baseline entries, reject non-canonical / traversal paths, reject duplicates
-    my %baseline_map;
+    my $baseline_files = $parsed_baseline->{files};
+    unless (ref($baseline_files) eq 'ARRAY') {
+        return (undef, { error => "Baseline document 'files' must be an array", code => 2 });
+    }
+
+    my $baseline_symlinks = $parsed_baseline->{symlinks} || [];
+    unless (ref($baseline_symlinks) eq 'ARRAY') {
+        return (undef, { error => "Baseline document 'symlinks' must be an array", code => 2 });
+    }
+
+    # FIX-05: Verify file_count is a nonnegative integer matching files array length exactly
+    my $declared_count = $parsed_baseline->{file_count};
+    unless (defined $declared_count && "$declared_count" =~ /^\d+$/ && $declared_count >= 0) {
+        return (undef, {
+            error => "Malformed file_count in baseline header: must be a nonnegative integer",
+            code  => 2,
+        });
+    }
+    if (int($declared_count) != scalar(@$baseline_files)) {
+        return (undef, {
+            error => "Baseline header file_count mismatch: declared $declared_count but contains " . scalar(@$baseline_files) . " entries",
+            code  => 2,
+        });
+    }
+
+    # FIX-05: Reject excessive entry counts
+    if (scalar(@$baseline_files) > MAX_BASELINE_ENTRIES) {
+        return (undef, {
+            error => "Baseline contains excessive files exceeding limit (" . MAX_BASELINE_ENTRIES . ")",
+            code  => 2,
+        });
+    }
+    if (scalar(@$baseline_symlinks) > MAX_BASELINE_ENTRIES) {
+        return (undef, {
+            error => "Baseline contains excessive symlinks exceeding limit (" . MAX_BASELINE_ENTRIES . ")",
+            code  => 2,
+        });
+    }
+
+    # Validate baseline entries, reject non-canonical / traversal paths, reject duplicates across types
+    my %baseline_files_map;
+    my %baseline_symlinks_map;
+    my %all_baseline_identities;
+
     for my $b_entry (@$baseline_files) {
         unless (ref($b_entry) eq 'HASH') {
             return (undef, { error => "Invalid baseline file entry: must be an object", code => 2 });
@@ -658,10 +749,10 @@ sub verify_baseline {
 
         my $p = $b_entry->{path};
         unless (validate_relative_path($p)) {
-            return (undef, { error => "Invalid or unsafe path entry in baseline: '$p'", code => 2 });
+            return (undef, { error => "Invalid or unsafe path entry in baseline files: " . ($p // 'undef'), code => 2 });
         }
 
-        if (exists $baseline_map{$p}) {
+        if (exists $all_baseline_identities{$p}) {
             return (undef, { error => "Duplicate path entry in baseline: '$p'", code => 2 });
         }
 
@@ -670,7 +761,7 @@ sub verify_baseline {
             return (undef, { error => "Malformed SHA-256 digest in baseline for '$p'", code => 2 });
         }
 
-        unless (defined $b_entry->{size_bytes} && $b_entry->{size_bytes} =~ /^\d+$/ && int($b_entry->{size_bytes}) >= 0) {
+        unless (defined $b_entry->{size_bytes} && "$b_entry->{size_bytes}" =~ /^\d+$/ && int($b_entry->{size_bytes}) >= 0) {
             return (undef, { error => "Malformed or negative size_bytes in baseline for '$p'", code => 2 });
         }
 
@@ -678,7 +769,37 @@ sub verify_baseline {
             return (undef, { error => "Malformed octal permission mode in baseline for '$p': '$b_entry->{mode}'", code => 2 });
         }
 
-        $baseline_map{$p} = $b_entry;
+        $all_baseline_identities{$p} = 'file';
+        $baseline_files_map{$p}      = $b_entry;
+    }
+
+    for my $s_entry (@$baseline_symlinks) {
+        unless (ref($s_entry) eq 'HASH') {
+            return (undef, { error => "Invalid baseline symlink entry: must be an object", code => 2 });
+        }
+
+        my $p = $s_entry->{path};
+        unless (validate_relative_path($p)) {
+            return (undef, { error => "Invalid or unsafe path entry in baseline symlinks: " . ($p // 'undef'), code => 2 });
+        }
+
+        if (exists $all_baseline_identities{$p}) {
+            return (undef, {
+                error => "Duplicate path identity across baseline entry types: '$p' already defined as $all_baseline_identities{$p}",
+                code  => 2,
+            });
+        }
+
+        unless (defined $s_entry->{symlink_target}) {
+            return (undef, { error => "Missing symlink_target in baseline symlinks for '$p'", code => 2 });
+        }
+
+        if (defined $s_entry->{mode} && $s_entry->{mode} !~ /^0[0-7]{3,4}$/) {
+            return (undef, { error => "Malformed octal permission mode in baseline symlinks for '$p': '$s_entry->{mode}'", code => 2 });
+        }
+
+        $all_baseline_identities{$p}   = 'symlink';
+        $baseline_symlinks_map{$p}     = $s_entry;
     }
 
     # Inventory current filesystem state
@@ -692,6 +813,11 @@ sub verify_baseline {
         concurrent_modifications => 0,
     );
 
+    # Allow test injection of scan errors
+    if ($args{_inject_scan_error}) {
+        push @scan_errors, { path => $canon_target, error => $args{_inject_scan_error} };
+    }
+
     _scan_directory(
         root_dir              => $canon_target,
         current_dir           => $canon_target,
@@ -704,11 +830,31 @@ sub verify_baseline {
         state                 => \%state,
     );
 
+    # Map scan errors by normalized relative path (FIX-01)
+    my %scan_errors_by_path;
+    for my $err_item (@scan_errors) {
+        my $raw_p = $err_item->{path};
+        my $rel_p = File::Spec->abs2rel($raw_p, $canon_target);
+        $rel_p =~ s{\\}{/}g;
+        $rel_p = '.' if $rel_p eq '' || $rel_p eq File::Spec->curdir();
+        if (exists $scan_errors_by_path{$rel_p}) {
+            $scan_errors_by_path{$rel_p} .= "; " . $err_item->{error};
+        } else {
+            $scan_errors_by_path{$rel_p} = $err_item->{error};
+        }
+    }
+
     my %current_files_map    = map { $_->{path} => $_ } @current_files;
     my %current_symlinks_map = map { $_->{path} => $_ } @current_symlinks;
 
-    # Collect all unique paths
-    my %all_paths = map { $_ => 1 } (keys %baseline_map, keys %current_files_map, keys %current_symlinks_map);
+    # Collect all unique paths across baseline, live filesystem, and scan errors
+    my %all_paths = map { $_ => 1 } (
+        keys %baseline_files_map,
+        keys %baseline_symlinks_map,
+        keys %current_files_map,
+        keys %current_symlinks_map,
+        keys %scan_errors_by_path,
+    );
     my @sorted_paths = sort keys %all_paths;
     my @findings;
 
@@ -735,9 +881,21 @@ sub verify_baseline {
     };
 
     for my $path (@sorted_paths) {
-        my $in_base     = exists $baseline_map{$path};
-        my $in_curr_reg = exists $current_files_map{$path};
-        my $in_curr_sym = exists $current_symlinks_map{$path};
+        # FIX-01: Explicit scan error for this specific path
+        if (exists $scan_errors_by_path{$path}) {
+            $summary{error}++;
+            push @findings, {
+                path   => $path,
+                status => 'ERROR',
+                error  => $scan_errors_by_path{$path},
+            };
+            next;
+        }
+
+        my $in_base_file = exists $baseline_files_map{$path};
+        my $in_base_sym  = exists $baseline_symlinks_map{$path};
+        my $in_curr_reg  = exists $current_files_map{$path};
+        my $in_curr_sym  = exists $current_symlinks_map{$path};
 
         # FIX-06: Check if path falls within an inaccessible directory subtree
         my $inacc_reason = is_path_under_inaccessible_subtree($path);
@@ -752,8 +910,8 @@ sub verify_baseline {
             next;
         }
 
-        if ($in_base && $in_curr_reg) {
-            my $b = $baseline_map{$path};
+        if ($in_base_file && $in_curr_reg) {
+            my $b = $baseline_files_map{$path};
             my $c = $current_files_map{$path};
 
             my $hash_diff = lc($b->{sha256}) ne lc($c->{sha256});
@@ -788,7 +946,32 @@ sub verify_baseline {
                     details => $details,
                 };
             }
-        } elsif ($in_base && $in_curr_sym) {
+        } elsif ($in_base_sym && $in_curr_sym) {
+            # FIX-02: Compare symlinks deterministically
+            my $b_sym = $baseline_symlinks_map{$path};
+            my $c_sym = $current_symlinks_map{$path};
+
+            if ($b_sym->{symlink_target} eq $c_sym->{symlink_target}) {
+                $summary{unchanged}++;
+                push @findings, {
+                    path           => $path,
+                    status         => 'UNCHANGED',
+                    type           => 'symlink',
+                    symlink_target => $c_sym->{symlink_target},
+                };
+            } else {
+                $summary{modified}++;
+                push @findings, {
+                    path    => $path,
+                    status  => 'MODIFIED',
+                    details => {
+                        type            => 'symlink',
+                        target_baseline => $b_sym->{symlink_target},
+                        target_current  => $c_sym->{symlink_target},
+                    },
+                };
+            }
+        } elsif ($in_base_file && $in_curr_sym) {
             # FIX-02: Regular file replaced by a symbolic link
             $summary{modified}++;
             push @findings, {
@@ -799,7 +982,18 @@ sub verify_baseline {
                     symlink_target => $current_symlinks_map{$path}->{symlink_target},
                 },
             };
-        } elsif (!$in_base && $in_curr_reg) {
+        } elsif ($in_base_sym && $in_curr_reg) {
+            # FIX-02: Symbolic link replaced by a regular file
+            $summary{modified}++;
+            push @findings, {
+                path    => $path,
+                status  => 'MODIFIED',
+                details => {
+                    type_change => "Symbolic link replaced by regular file",
+                    sha256      => $current_files_map{$path}->{sha256},
+                },
+            };
+        } elsif (!$in_base_file && !$in_base_sym && $in_curr_reg) {
             $summary{added}++;
             my $c = $current_files_map{$path};
             push @findings, {
@@ -811,7 +1005,7 @@ sub verify_baseline {
                     mode       => $c->{mode},
                 },
             };
-        } elsif (!$in_base && $in_curr_sym) {
+        } elsif (!$in_base_file && !$in_base_sym && $in_curr_sym) {
             # FIX-02: Newly added symbolic link detected
             $summary{added}++;
             push @findings, {
@@ -822,8 +1016,8 @@ sub verify_baseline {
                     symlink_target => $current_symlinks_map{$path}->{symlink_target},
                 },
             };
-        } elsif ($in_base && !$in_curr_reg && !$in_curr_sym) {
-            # Path in baseline but absent from both regular files and symlinks.
+        } elsif (($in_base_file || $in_base_sym) && !$in_curr_reg && !$in_curr_sym) {
+            # Path in baseline but absent from both live regular files and live symlinks.
             my $full_child = File::Spec->catfile($canon_target, $path);
             my @st = lstat($full_child);
 
@@ -834,6 +1028,7 @@ sub verify_baseline {
                     push @findings, {
                         path   => $path,
                         status => 'REMOVED',
+                        ($in_base_sym ? (type => 'symlink') : ()),
                     };
                 } else {
                     # Permission error or I/O failure (EACCES/EPERM): report ERROR, not REMOVED
@@ -845,12 +1040,12 @@ sub verify_baseline {
                     };
                 }
             } else {
-                # Special non-regular file replaced regular file
+                # Special non-regular file replaced regular file or symlink
                 $summary{error}++;
                 push @findings, {
                     path   => $path,
                     status => 'ERROR',
-                    error  => "Regular file replaced by unsupported non-regular file",
+                    error  => "Baseline entry replaced on filesystem by unsupported non-regular file",
                 };
             }
         }
@@ -870,14 +1065,15 @@ sub verify_baseline {
     @findings = sort { $a->{path} cmp $b->{path} } @findings;
 
     my $report_data = {
-        target_directory     => $canon_target,
-        baseline_file        => $baseline_file,
-        baseline_sha256      => $baseline_digest,
-        total_baseline_files => scalar(keys %baseline_map),
-        total_current_files  => scalar(@current_files),
-        total_symlinks       => scalar(@current_symlinks),
-        summary              => \%summary,
-        findings             => \@findings,
+        target_directory        => $canon_target,
+        baseline_file           => $baseline_file,
+        baseline_sha256         => $baseline_digest,
+        total_baseline_files    => scalar(keys %baseline_files_map),
+        total_baseline_symlinks => scalar(keys %baseline_symlinks_map),
+        total_current_files     => scalar(@current_files),
+        total_current_symlinks  => scalar(@current_symlinks),
+        summary                 => \%summary,
+        findings                => \@findings,
     };
 
     # Exit code determination:
