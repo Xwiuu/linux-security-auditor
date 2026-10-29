@@ -147,7 +147,7 @@ Used by the Perl `sec-cli` tool for DNS, TCP, hashing, and structured logging.
     "component": { "type": "string", "const": "sec-cli" },
     "command": {
       "type": "string",
-      "enum": ["dns", "tcp-check", "hash", "log"]
+      "enum": ["dns", "tcp-check", "hash", "log", "integrity-init", "integrity-verify"]
     },
     "timestamp": { "type": "string", "format": "date-time" },
     "status": { "type": "string", "enum": ["success", "warning", "error", "timeout"] },
@@ -203,6 +203,78 @@ Used by the Perl `sec-cli` tool for DNS, TCP, hashing, and structured logging.
     "findings_total": 40,
     "target": "localhost"
   }
+}
+```
+
+#### Payload: `integrity-init`
+```json
+{
+  "target_directory": "/etc",
+  "output_file": "/var/backups/etc-baseline.json",
+  "baseline_sha256": "4e1a0b38c0f5854611599818abf5cd4f3eead722ad9dc98f483c67c5e533c37d",
+  "files_indexed": 142,
+  "directories_scanned": 18,
+  "inaccessible_count": 0
+}
+```
+
+#### Payload: `integrity-verify`
+```json
+{
+  "target_directory": "/etc",
+  "baseline_file": "/var/backups/etc-baseline.json",
+  "baseline_sha256": "4e1a0b38c0f5854611599818abf5cd4f3eead722ad9dc98f483c67c5e533c37d",
+  "total_baseline_files": 142,
+  "total_current_files": 143,
+  "summary": {
+    "unchanged": 141,
+    "modified": 1,
+    "added": 1,
+    "removed": 0,
+    "error": 0
+  },
+  "findings": [
+    {
+      "path": "hosts",
+      "status": "MODIFIED",
+      "details": {
+        "sha256_baseline": "3a01...",
+        "sha256_current": "8b02...",
+        "size_baseline": 150,
+        "size_current": 180
+      }
+    },
+    {
+      "path": "shadow.bak",
+      "status": "ADDED",
+      "details": {
+        "sha256": "5c03...",
+        "size_bytes": 1200
+      }
+    }
+  ]
+}
+```
+
+#### Storage Schema: `integrity-baseline.v1.json`
+Stored reference state written atomically with permissions `0600`:
+```json
+{
+  "$schema": "https://lsa.security/schemas/integrity-baseline.v1.json",
+  "schema_version": "1.0.0",
+  "generator": "sec-cli",
+  "generated_at": "2026-10-29T13:00:00.000Z",
+  "target_directory": "/etc",
+  "file_count": 142,
+  "files": [
+    {
+      "path": "hosts",
+      "sha256": "3a01...",
+      "size_bytes": 150,
+      "mode": "0644",
+      "mtime_epoch": 1729000000
+    }
+  ]
 }
 ```
 

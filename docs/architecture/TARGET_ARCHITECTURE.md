@@ -110,7 +110,7 @@ linux-security-auditor/
 - **Execution:** Pure standard Perl core modules (`Socket`, `IO::Socket::IP`, `Digest::SHA`, `Getopt::Long`, `JSON::PP`).
 - **Dependencies:** Standard Perl core only. Note: While Perl is widely installed on standard enterprise distros, its availability varies across minimal, containerized, or appliance Linux images.
 - **Contract:** Emits `sec-ops.v1.json` envelope with explicit exit codes and error structures.
-- **Scope Note:** File integrity baselining and verification are deferred to a subsequent sprint.
+- **Scope Note:** File integrity baselining (`integrity-init`) and verification (`integrity-verify`) introduced in Sprint 02.
 
 ### 3.3. Infrastructure Collector (`lsa-collector`, Rust - Tentative)
 - **Boundary:** High-performance, memory-safe, read-only system metrics extraction.
@@ -136,10 +136,12 @@ Each CLI component (`lsa`, `sec-cli`) is directly executable on the command line
 # 1. Existing Bash auditor
 ./lsa audit --format json --output report.json
 
-# 2. Perl Security Engineering CLI (Sprint 01)
+# 2. Perl Security Engineering CLI (Sprint 01 & 02)
 ./sec-cli/bin/sec-cli hash /etc/passwd --algo sha256
 ./sec-cli/bin/sec-cli tcp-check 127.0.0.1 22 --timeout 3
 ./sec-cli/bin/sec-cli dns localhost
+./sec-cli/bin/sec-cli integrity-init /etc --output /var/backups/etc-baseline.json
+./sec-cli/bin/sec-cli integrity-verify /etc --baseline /var/backups/etc-baseline.json
 ```
 
 ### 4.2. Subprocess Handling & Timeout Policy

@@ -110,6 +110,20 @@ my $log_extra_json = eval { JSON::PP->new->decode($log_extra) };
 is($log_extra_json->{exit_code}, 2, "log error envelope has exit_code 2");
 like($log_extra_json->{errors}->[0], qr/Unexpected extra argument: 'extra_arg'/, "log extra argument error message");
 
+# 5e. integrity-init: expects 1 argument
+my $init_extra = `$bin integrity-init /tmp extra_arg --output /tmp/base.json --format json 2>&1`;
+is($? >> 8, 2, "integrity-init with unexpected extra argument exits with code 2");
+my $init_extra_json = eval { JSON::PP->new->decode($init_extra) };
+is($init_extra_json->{exit_code}, 2, "integrity-init error envelope has exit_code 2");
+like($init_extra_json->{errors}->[0], qr/Unexpected extra argument: 'extra_arg'/, "integrity-init extra argument error message");
+
+# 5f. integrity-verify: expects 1 argument
+my $ver_extra = `$bin integrity-verify /tmp extra_arg --baseline /tmp/base.json --format json 2>&1`;
+is($? >> 8, 2, "integrity-verify with unexpected extra argument exits with code 2");
+my $ver_extra_json = eval { JSON::PP->new->decode($ver_extra) };
+is($ver_extra_json->{exit_code}, 2, "integrity-verify error envelope has exit_code 2");
+like($ver_extra_json->{errors}->[0], qr/Unexpected extra argument: 'extra_arg'/, "integrity-verify extra argument error message");
+
 # 6. Options placed before or after command arguments
 my $opt_after = `$bin dns localhost --timeout 2 --format json`;
 is($?, 0, "Options placed after positional argument work correctly");

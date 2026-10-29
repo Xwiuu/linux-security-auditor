@@ -18,6 +18,7 @@ use LSA::SecEng::DNS;
 use LSA::SecEng::TCP;
 use LSA::SecEng::Hash;
 use LSA::SecEng::Logger;
+use LSA::SecEng::Integrity;
 
 our $VERSION = '1.0.0';
 
@@ -33,12 +34,17 @@ Commands:
   tcp-check <host> <port>    TCP connectivity and latency check
   hash <file>                Cryptographic SHA-256 file hashing
   log <message>              Structured JSON event logger
+  integrity-init <dir>       Generate cryptographic file integrity baseline
+  integrity-verify <dir>     Verify directory tree against stored baseline
 
 Options:
   --format <json|text>       Output format (default: json)
   --timeout <seconds>        Operation timeout in seconds (default: 3, max: 10)
   --level <info|warn|error>  Log level for log command (default: info)
   --context <json-string>    JSON context object for log command
+  --output <file>            Output path for integrity-init baseline
+  --baseline <file>          Baseline reference file for integrity-verify
+  --force                    Allow overwriting output baseline file in integrity-init
   -h, --help                 Show this help message
   -v, --version              Show version information
 
@@ -47,6 +53,8 @@ Examples:
   sec-cli tcp-check 127.0.0.1 22 --timeout 3
   sec-cli hash /etc/passwd
   sec-cli log "Audit initialization" --level info
+  sec-cli integrity-init /etc --output /tmp/etc-baseline.json
+  sec-cli integrity-verify /etc --baseline /tmp/etc-baseline.json
 EOF
 }
 
@@ -110,6 +118,32 @@ sub emit_output {
             if ($data->{timestamp} && $data->{level} && $data->{message}) {
                 print "[$data->{timestamp}] [$data->{level}] $data->{message}\n";
             }
+        } elsif ($command eq 'integrity-init') {
+            print "Target Directory: $data->{target_directory}\n" if defined $data->{target_directory};
+            print "Output Baseline: $data->{output_file}\n" if defined $data->{output_file};
+            print "Files Indexed: $data->{files_indexed}\n" if defined $data->{files_indexed};
+            print "Directories Scanned: $data->{directories_scanned}\n" if defined $data->{directories_scanned};
+            print "Baseline SHA-256: $data->{baseline_sha256}\n" if defined $data->{baseline_sha256};
+            print "Status: $status\n";
+        } elsif ($command eq 'integrity-verify') {
+            print "Target Directory: $data->{target_directory}\n" if defined $data->{target_directory};
+            print "Baseline File: $data->{baseline_file}\n" if defined $data->{baseline_file};
+            if ($data->{summary}) {
+                print "Summary:\n";
+                print "  Unchanged: $data->{summary}->{unchanged}\n";
+                print "  Modified:  $data->{summary}->{modified}\n";
+                print "  Added:     $data->{summary}->{added}\n";
+                print "  Removed:   $data->{summary}->{removed}\n";
+                print "  Errors:    $data->{summary}->{error}\n";
+            }
+            if ($data->{findings} && @{$data->{findings}}) {
+                print "Findings:\n";
+                for my $f (@{$data->{findings}}) {
+                    next if $f->{status} eq 'UNCHANGED';
+                    print "  [$f->{status}] $f->{path}\n";
+                }
+            }
+            print "Status: $status\n";
         }
     }
 
@@ -117,22 +151,28 @@ sub emit_output {
 }
 
 # --- Main Entrypoint ---
-my $format  = 'json';
-my $timeout = 3.0;
-my $level   = 'info';
-my $context_str = undef;
-my $help    = 0;
-my $version = 0;
+my $format        = 'json';
+my $timeout       = 3.0;
+my $level         = 'info';
+my $context_str   = undef;
+my $output_file   = undef;
+my $baseline_file = undef;
+my $force         = 0;
+my $help          = 0;
+my $version       = 0;
 
 # Extract global options if present before command
 Getopt::Long::Configure("pass_through");
 GetOptions(
-    'format=s'  => \$format,
-    'timeout=f' => \$timeout,
-    'level=s'   => \$level,
-    'context=s' => \$context_str,
-    'help|h'    => \$help,
-    'version|v' => \$version,
+    'format=s'    => \$format,
+    'timeout=f'   => \$timeout,
+    'level=s'     => \$level,
+    'context=s'   => \$context_str,
+    'output=s'    => \$output_file,
+    'baseline=s'  => \$baseline_file,
+    'force'       => \$force,
+    'help|h'      => \$help,
+    'version|v'   => \$version,
 );
 
 if ($version) {
@@ -156,12 +196,15 @@ my $command = shift @ARGV;
 Getopt::Long::Configure("no_pass_through");
 my $opt_ok = eval {
     GetOptions(
-        'format=s'  => \$format,
-        'timeout=f' => \$timeout,
-        'level=s'   => \$level,
-        'context=s' => \$context_str,
-        'help|h'    => \$help,
-        'version|v' => \$version,
+        'format=s'    => \$format,
+        'timeout=f'   => \$timeout,
+        'level=s'     => \$level,
+        'context=s'   => \$context_str,
+        'output=s'    => \$output_file,
+        'baseline=s'  => \$baseline_file,
+        'force'       => \$force,
+        'help|h'      => \$help,
+        'version|v'   => \$version,
     );
 };
 
@@ -433,6 +476,137 @@ if ($command eq 'dns') {
         status      => 'success',
         exit_code   => 0,
         data        => $log_entry,
+        errors      => [],
+    );
+
+} elsif ($command eq 'integrity-init') {
+    my $dir = shift @ARGV;
+
+    unless (defined $dir && length($dir)) {
+        emit_output(
+            format      => $format,
+            command     => 'integrity-init',
+            target_host => 'localhost',
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Usage: sec-cli integrity-init <target-directory> --output <baseline-file> [--format json|text] [--force]"],
+        );
+    }
+
+    if (@ARGV) {
+        my $extra = join(" ", @ARGV);
+        emit_output(
+            format      => $format,
+            command     => 'integrity-init',
+            target_host => 'localhost',
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Unexpected extra argument: '$extra'"],
+        );
+    }
+
+    unless (defined $output_file && length($output_file)) {
+        emit_output(
+            format      => $format,
+            command     => 'integrity-init',
+            target_host => 'localhost',
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Missing required option: --output <baseline-file>"],
+        );
+    }
+
+    my ($res, $err_info) = LSA::SecEng::Integrity::init_baseline(
+        directory => $dir,
+        output    => $output_file,
+        force     => $force,
+    );
+
+    if ($err_info) {
+        my $errors_arr = $err_info->{errors} || [$err_info->{error} || $err_info->{warning}];
+        emit_output(
+            format      => $format,
+            command     => 'integrity-init',
+            target_host => 'localhost',
+            status      => $err_info->{status} || 'error',
+            exit_code   => $err_info->{code} || 3,
+            data        => $res || {},
+            errors      => $errors_arr,
+        );
+    }
+
+    emit_output(
+        format      => $format,
+        command     => 'integrity-init',
+        target_host => 'localhost',
+        status      => 'success',
+        exit_code   => 0,
+        data        => $res,
+        errors      => [],
+    );
+
+} elsif ($command eq 'integrity-verify') {
+    my $dir = shift @ARGV;
+
+    unless (defined $dir && length($dir)) {
+        emit_output(
+            format      => $format,
+            command     => 'integrity-verify',
+            target_host => 'localhost',
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Usage: sec-cli integrity-verify <target-directory> --baseline <baseline-file> [--format json|text]"],
+        );
+    }
+
+    if (@ARGV) {
+        my $extra = join(" ", @ARGV);
+        emit_output(
+            format      => $format,
+            command     => 'integrity-verify',
+            target_host => 'localhost',
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Unexpected extra argument: '$extra'"],
+        );
+    }
+
+    unless (defined $baseline_file && length($baseline_file)) {
+        emit_output(
+            format      => $format,
+            command     => 'integrity-verify',
+            target_host => 'localhost',
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Missing required option: --baseline <baseline-file>"],
+        );
+    }
+
+    my ($res, $err_info) = LSA::SecEng::Integrity::verify_baseline(
+        directory => $dir,
+        baseline  => $baseline_file,
+    );
+
+    if ($err_info) {
+        my $errors_arr = $err_info->{errors} || [$err_info->{error} || $err_info->{warning}];
+        emit_output(
+            format      => $format,
+            command     => 'integrity-verify',
+            target_host => 'localhost',
+            status      => $err_info->{status} || 'error',
+            exit_code   => $err_info->{code} || 3,
+            data        => $res || {},
+            errors      => $errors_arr,
+        );
+    }
+
+    emit_output(
+        format      => $format,
+        command     => 'integrity-verify',
+        target_host => 'localhost',
+        status      => 'success',
+        exit_code   => 0,
+        data        => $res,
         errors      => [],
     );
 
