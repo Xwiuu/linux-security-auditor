@@ -15,6 +15,7 @@ require_ok('LSA::SecEng::TCP');
 require_ok('LSA::SecEng::Hash');
 require_ok('LSA::SecEng::Logger');
 require_ok('LSA::SecEng::Integrity');
+require_ok('LSA::SecEng::HostMetrics');
 
 # Test sec-cli syntax via perl -c
 my $cmd = "$^X -I$lib_dir -c $bin_file 2>&1";
