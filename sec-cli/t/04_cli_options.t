@@ -124,6 +124,13 @@ my $ver_extra_json = eval { JSON::PP->new->decode($ver_extra) };
 is($ver_extra_json->{exit_code}, 2, "integrity-verify error envelope has exit_code 2");
 like($ver_extra_json->{errors}->[0], qr/Unexpected extra argument: 'extra_arg'/, "integrity-verify extra argument error message");
 
+# 5g. host-metrics: expects 0 arguments
+my $hm_extra = `$bin host-metrics extra_arg --format json 2>&1`;
+is($? >> 8, 2, "host-metrics with unexpected extra argument exits with code 2");
+my $hm_extra_json = eval { JSON::PP->new->decode($hm_extra) };
+is($hm_extra_json->{exit_code}, 2, "host-metrics error envelope has exit_code 2");
+like($hm_extra_json->{errors}->[0], qr/Unexpected extra argument: 'extra_arg'/, "host-metrics extra argument error message");
+
 # 6. Options placed before or after command arguments
 my $opt_after = `$bin dns localhost --timeout 2 --format json`;
 is($?, 0, "Options placed after positional argument work correctly");

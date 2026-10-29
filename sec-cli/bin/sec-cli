@@ -19,6 +19,7 @@ use LSA::SecEng::TCP;
 use LSA::SecEng::Hash;
 use LSA::SecEng::Logger;
 use LSA::SecEng::Integrity;
+use LSA::SecEng::HostMetrics;
 
 our $VERSION = '1.0.0';
 
@@ -36,6 +37,7 @@ Commands:
   log <message>              Structured JSON event logger
   integrity-init <dir>       Generate cryptographic file integrity baseline
   integrity-verify <dir>     Verify directory tree against stored baseline
+  host-metrics               Collect read-only host memory, load, and mount telemetry
 
 Options:
   --format <json|text>       Output format (default: json)
@@ -55,6 +57,7 @@ Examples:
   sec-cli log "Audit initialization" --level info
   sec-cli integrity-init /etc --output /tmp/etc-baseline.json
   sec-cli integrity-verify /etc --baseline /tmp/etc-baseline.json
+  sec-cli host-metrics --format json
 EOF
 }
 
@@ -141,6 +144,30 @@ sub emit_output {
                 for my $f (@{$data->{findings}}) {
                     next if $f->{status} eq 'UNCHANGED';
                     print "  [$f->{status}] $f->{path}\n";
+                }
+            }
+            print "Status: $status\n";
+        } elsif ($command eq 'host-metrics') {
+            if ($data->{memory}) {
+                print "Memory (KiB):\n";
+                print "  Total:     $data->{memory}->{mem_total_kib}\n";
+                print "  Available: $data->{memory}->{mem_available_kib}\n";
+                print "  Free:      $data->{memory}->{mem_free_kib}\n";
+                print "  SwapTotal: $data->{memory}->{swap_total_kib}\n";
+                print "  SwapFree:  $data->{memory}->{swap_free_kib}\n";
+            }
+            if ($data->{load_average}) {
+                print "Load Average: $data->{load_average}->{load_1m}, $data->{load_average}->{load_5m}, $data->{load_average}->{load_15m}\n";
+            }
+            if ($data->{mounts} && @{$data->{mounts}}) {
+                print "Mounts (" . scalar(@{$data->{mounts}}) . " total):\n";
+                for my $m (@{$data->{mounts}}) {
+                    my @flags;
+                    push @flags, "nodev" if $m->{nodev};
+                    push @flags, "nosuid" if $m->{nosuid};
+                    push @flags, "noexec" if $m->{noexec};
+                    my $flags_str = @flags ? join(",", @flags) : "none";
+                    print "  $m->{mount_point} [$m->{filesystem_type}] flags: $flags_str\n";
                 }
             }
             print "Status: $status\n";
@@ -603,6 +630,44 @@ if ($command eq 'dns') {
     emit_output(
         format      => $format,
         command     => 'integrity-verify',
+        target_host => 'localhost',
+        status      => 'success',
+        exit_code   => 0,
+        data        => $res,
+        errors      => [],
+    );
+
+} elsif ($command eq 'host-metrics') {
+    if (@ARGV) {
+        my $extra = join(" ", @ARGV);
+        emit_output(
+            format      => $format,
+            command     => 'host-metrics',
+            target_host => 'localhost',
+            status      => 'error',
+            exit_code   => 2,
+            errors      => ["Unexpected extra argument: '$extra'"],
+        );
+    }
+
+    my ($res, $err_info) = LSA::SecEng::HostMetrics::collect_host_metrics();
+
+    if ($err_info) {
+        my $errors_arr = $err_info->{errors} || [$err_info->{error}];
+        emit_output(
+            format      => $format,
+            command     => 'host-metrics',
+            target_host => 'localhost',
+            status      => $err_info->{status} || 'error',
+            exit_code   => $err_info->{code} || 3,
+            data        => {},
+            errors      => $errors_arr,
+        );
+    }
+
+    emit_output(
+        format      => $format,
+        command     => 'host-metrics',
         target_host => 'localhost',
         status      => 'success',
         exit_code   => 0,
