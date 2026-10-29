@@ -20,7 +20,7 @@ _get_os_release_value() {
 
   [[ -r "$file" ]] || return 1
 
-  local line key val
+  local line key val inner content slashes
   while IFS= read -r line || [[ -n "$line" ]]; do
     # Strip leading and trailing whitespace
     line="${line#"${line%%[![:space:]]*}"}"
@@ -44,8 +44,14 @@ _get_os_release_value() {
     if [[ "$val" == \"* ]]; then
       # Double-quoted string: must end with quote and have balanced quotes
       if [[ "$val" == *\" && "${#val}" -ge 2 ]]; then
-        val="${val#\"}"
-        val="${val%\"}"
+        inner="${val#\"}"
+        content="${inner%\"}"
+        slashes="${content##*[!\\]}"
+        if ((${#slashes} % 2 != 0)); then
+          # Trailing quote was escaped, meaning the string is unclosed
+          return 1
+        fi
+        val="$content"
         # Unescape standard os-release escapes: \", \\, \$, \`
         val="${val//\\\"/\"}"
         val="${val//\\\\/\\}"

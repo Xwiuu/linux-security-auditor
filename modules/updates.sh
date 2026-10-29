@@ -3,12 +3,17 @@
 LSA_DNF_TIMEOUT="${LSA_DNF_TIMEOUT:-15}"
 
 _run_bounded_dnf() {
-  local timeout_cmd=()
-  if command -v timeout >/dev/null 2>&1; then
-    timeout_cmd=(timeout "$LSA_DNF_TIMEOUT")
+  local timeout_val="${LSA_DNF_TIMEOUT:-15}"
+
+  if [[ ! "$timeout_val" =~ ^[1-9][0-9]*$ ]] || ((timeout_val > 300)); then
+    return 125
   fi
 
-  "${timeout_cmd[@]}" dnf "$@" </dev/null
+  if ! command -v timeout >/dev/null 2>&1; then
+    return 126
+  fi
+
+  timeout "$timeout_val" dnf "$@" </dev/null
 }
 
 check_pending_updates() {
@@ -46,10 +51,32 @@ check_pending_updates() {
         category=updates \
         severity=info \
         title="Package update check timed out" \
-        description="The pending package update check exceeded the timeout threshold (${LSA_DNF_TIMEOUT}s)" \
-        expected="dnf check-update completes within ${LSA_DNF_TIMEOUT}s" \
+        description="The pending package update check exceeded the timeout threshold (${LSA_DNF_TIMEOUT:-15}s)" \
+        expected="dnf check-update completes within ${LSA_DNF_TIMEOUT:-15}s" \
         actual="dnf check-update timed out (status 124)" \
         recommendation="Verify repository responsiveness and network connectivity"
+      ;;
+    125)
+      finding \
+        id=UPDATE-001 \
+        category=updates \
+        severity=info \
+        title="Package update timeout configuration invalid" \
+        description="The package update timeout configuration is invalid" \
+        expected="LSA_DNF_TIMEOUT is an integer between 1 and 300 seconds" \
+        actual="Invalid timeout value: ${LSA_DNF_TIMEOUT:-}" \
+        recommendation="Configure LSA_DNF_TIMEOUT to an integer between 1 and 300"
+      ;;
+    126)
+      finding \
+        id=UPDATE-001 \
+        category=updates \
+        severity=info \
+        title="Bounded execution wrapper unavailable" \
+        description="The timeout command is required to bound package manager execution" \
+        expected="timeout command is available in PATH" \
+        actual="timeout command unavailable" \
+        recommendation="Install coreutils or verify PATH contains the timeout executable"
       ;;
     *)
       finding \
@@ -76,11 +103,23 @@ check_security_updates() {
     local actual_msg="dnf updateinfo exited with status $status"
     local title_msg="Security update status could not be audited"
     local desc_msg="The pending security update check did not complete"
+    local rec_msg="Verify dnf availability and repository access"
 
     if ((status == 124)); then
       title_msg="Security update check timed out"
-      desc_msg="The pending security update check exceeded the timeout threshold (${LSA_DNF_TIMEOUT}s)"
+      desc_msg="The pending security update check exceeded the timeout threshold (${LSA_DNF_TIMEOUT:-15}s)"
       actual_msg="dnf updateinfo timed out (status 124)"
+      rec_msg="Verify repository responsiveness and network connectivity"
+    elif ((status == 125)); then
+      title_msg="Security update timeout configuration invalid"
+      desc_msg="The package update timeout configuration is invalid"
+      actual_msg="Invalid timeout value: ${LSA_DNF_TIMEOUT:-}"
+      rec_msg="Configure LSA_DNF_TIMEOUT to an integer between 1 and 300"
+    elif ((status == 126)); then
+      title_msg="Bounded execution wrapper unavailable"
+      desc_msg="The timeout command is required to bound package manager execution"
+      actual_msg="timeout command unavailable"
+      rec_msg="Install coreutils or verify PATH contains the timeout executable"
     fi
 
     finding \
@@ -91,7 +130,7 @@ check_security_updates() {
       description="$desc_msg" \
       expected="dnf updateinfo reports no outstanding security updates" \
       actual="$actual_msg" \
-      recommendation="Verify dnf availability and repository access"
+      recommendation="$rec_msg"
 
     return 0
   fi

@@ -267,6 +267,21 @@ EOF
   [[ "$(get_os_name)" == 'Custom "Secure" OS' ]] || fail "Escaped quote parsing failed"
   [[ "$(get_os_version)" == "Version \\1.0\\" ]] || fail "Escaped backslash parsing failed"
 
+  # 3b. Consecutive backslashes and escaped quotes round-trip
+  cat >"$os_fixture" <<'EOF'
+NAME="Prefix \\\"Quoted\\\" Suffix"
+VERSION="Version \\\\1.0\\\\"
+EOF
+  [[ "$(get_os_name)" == 'Prefix \"Quoted\" Suffix' ]] || fail "Escaped backslash and quote parsing failed"
+  [[ "$(get_os_version)" == "Version \\\\1.0\\\\" ]] || fail "Consecutive backslashes parsing failed"
+
+  cat >"$os_fixture" <<'EOF'
+NAME="Quad\\\\Backslash"
+VERSION="Version \\\\\\\\2.0"
+EOF
+  [[ "$(get_os_name)" == 'Quad\\Backslash' ]] || fail "Quad backslash parsing failed"
+  [[ "$(get_os_version)" == "Version \\\\\\\\2.0" ]] || fail "Eight backslashes parsing failed"
+
   # 4. Missing fields
   cat >"$os_fixture" <<'EOF'
 ID=minimal
@@ -282,6 +297,14 @@ VERSION=1.0
 EOF
   [[ "$(get_os_name)" == "Unknown" ]] || fail "Unclosed quote in NAME must return Unknown"
   [[ "$(get_os_version)" == "1.0" ]] || fail "VERSION should parse despite malformed NAME"
+
+  # 5b. Malformed fields: unclosed quote ending in escaped quote
+  cat >"$os_fixture" <<'EOF'
+NAME="Unclosed ending in escaped quote\"
+VERSION="Valid 1.0"
+EOF
+  [[ "$(get_os_name)" == "Unknown" ]] || fail "Quote ending in escaped quote must return Unknown"
+  [[ "$(get_os_version)" == "Valid 1.0" ]] || fail "VERSION should parse when preceding NAME has escaped quote"
 
   # 6. Malformed unquoted value containing spaces
   cat >"$os_fixture" <<'EOF'
@@ -510,7 +533,78 @@ test_bounded_dnf_execution() {
   source "$ROOT_DIR/lib/findings.sh"
   source "$ROOT_DIR/modules/updates.sh"
 
-  # Test 1: Timeout simulation on check-update
+  # 1. Fail closed when timeout executable is unavailable: DNF must NOT be executed
+  local no_timeout_bin="$tmp_dir/no_timeout_bin"
+  mkdir -p "$no_timeout_bin"
+  ln -s "$(command -v bash)" "$no_timeout_bin/bash"
+  ln -s "$(command -v awk)" "$no_timeout_bin/awk"
+
+  local no_timeout_canary="$tmp_dir/dnf_ran_when_no_timeout.canary"
+  rm -f "$no_timeout_canary"
+  cat >"$no_timeout_bin/dnf" <<EOF
+#!/usr/bin/env bash
+touch '$no_timeout_canary'
+exit 0
+EOF
+  chmod +x "$no_timeout_bin/dnf"
+
+  (
+    export PATH="$no_timeout_bin"
+    finding_reset
+    check_pending_updates
+    [[ ! -e "$no_timeout_canary" ]] || fail "DNF was executed when timeout was unavailable (check_pending_updates)"
+    [[ "$(findings_count)" -eq 1 ]] || fail "Missing timeout should emit one finding (check_pending_updates)"
+    [[ "$(findings_get 0 id)" == "UPDATE-001" ]] || fail "Expected UPDATE-001 for missing timeout"
+    [[ "$(findings_get 0 severity)" == "info" ]] || fail "Expected info severity for missing timeout"
+    [[ "$(findings_get 0 title)" == *"wrapper unavailable"* ]] || fail "Title must identify wrapper unavailable"
+    [[ "$(findings_get 0 actual)" == *"timeout command unavailable"* ]] || fail "Actual must identify timeout command unavailable"
+
+    finding_reset
+    check_security_updates
+    [[ ! -e "$no_timeout_canary" ]] || fail "DNF was executed when timeout was unavailable (check_security_updates)"
+    [[ "$(findings_count)" -eq 1 ]] || fail "Missing timeout should emit one finding (check_security_updates)"
+    [[ "$(findings_get 0 id)" == "UPDATE-002" ]] || fail "Expected UPDATE-002 for missing timeout"
+    [[ "$(findings_get 0 severity)" == "info" ]] || fail "Expected info severity for missing timeout"
+    [[ "$(findings_get 0 title)" == *"wrapper unavailable"* ]] || fail "Title must identify wrapper unavailable"
+    [[ "$(findings_get 0 actual)" == *"timeout command unavailable"* ]] || fail "Actual must identify timeout command unavailable"
+  )
+
+  # 2. Invalid LSA_DNF_TIMEOUT: DNF must NOT be executed
+  local invalid_timeout_canary="$tmp_dir/dnf_ran_when_invalid_timeout.canary"
+  rm -f "$invalid_timeout_canary"
+  cat >"$bin_dir/dnf" <<EOF
+#!/usr/bin/env bash
+touch '$invalid_timeout_canary'
+exit 0
+EOF
+  chmod +x "$bin_dir/dnf"
+
+  local invalid_vals=("0" "-5" "abc" "9999" "05" "301")
+  for invalid_val in "${invalid_vals[@]}"; do
+    rm -f "$invalid_timeout_canary"
+
+    finding_reset
+    LSA_DNF_TIMEOUT="$invalid_val" check_pending_updates
+    [[ ! -e "$invalid_timeout_canary" ]] || fail "DNF executed with invalid timeout '$invalid_val' (check_pending_updates)"
+    [[ "$(findings_count)" -eq 1 ]] || fail "Invalid timeout must emit one finding"
+    [[ "$(findings_get 0 id)" == "UPDATE-001" ]] || fail "Expected UPDATE-001 for invalid timeout"
+    [[ "$(findings_get 0 severity)" == "info" ]] || fail "Invalid timeout severity must be info"
+    [[ "$(findings_get 0 title)" == *"timeout configuration invalid"* ]] || fail "Title must indicate invalid configuration"
+    [[ "$(findings_get 0 actual)" == *"Invalid timeout value: $invalid_val"* ]] || fail "Actual must report invalid timeout"
+
+    rm -f "$invalid_timeout_canary"
+
+    finding_reset
+    LSA_DNF_TIMEOUT="$invalid_val" check_security_updates
+    [[ ! -e "$invalid_timeout_canary" ]] || fail "DNF executed with invalid timeout '$invalid_val' (check_security_updates)"
+    [[ "$(findings_count)" -eq 1 ]] || fail "Invalid timeout must emit one finding"
+    [[ "$(findings_get 0 id)" == "UPDATE-002" ]] || fail "Expected UPDATE-002 for invalid timeout"
+    [[ "$(findings_get 0 severity)" == "info" ]] || fail "Invalid timeout severity must be info"
+    [[ "$(findings_get 0 title)" == *"timeout configuration invalid"* ]] || fail "Title must indicate invalid configuration"
+    [[ "$(findings_get 0 actual)" == *"Invalid timeout value: $invalid_val"* ]] || fail "Actual must report invalid timeout"
+  done
+
+  # 3. Timeout simulation on check-update (exit code 124)
   cat >"$bin_dir/dnf" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == "check-update" ]]; then
@@ -530,7 +624,7 @@ EOF
   [[ "$(findings_get 0 title)" == *"timed out"* ]] || fail "Title must indicate timeout"
   [[ "$(findings_get 0 actual)" == *"timed out"* ]] || fail "Actual must indicate timeout"
 
-  # Test 2: Timeout simulation on updateinfo
+  # 4. Timeout simulation on updateinfo (exit code 124)
   cat >"$bin_dir/dnf" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == "updateinfo" ]]; then
@@ -550,7 +644,25 @@ EOF
   [[ "$(findings_get 0 title)" == *"timed out"* ]] || fail "Title must indicate timeout"
   [[ "$(findings_get 0 actual)" == *"timed out"* ]] || fail "Actual must indicate timeout"
 
-  # Test 3: Verify non-interactive arguments and stdin redirection
+  # 5. dnf check-update exit code 100 correctly classified as Pending package updates detected
+  cat >"$bin_dir/dnf" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "check-update" ]]; then
+  echo "kernel.x86_64 6.12.0-1.el9 updates"
+  exit 100
+fi
+exit 0
+EOF
+  chmod +x "$bin_dir/dnf"
+
+  finding_reset
+  LSA_DNF_TIMEOUT=15 check_pending_updates
+  [[ "$(findings_count)" -eq 1 ]] || fail "Exit code 100 should emit one finding"
+  [[ "$(findings_get 0 id)" == "UPDATE-001" ]] || fail "Expected UPDATE-001"
+  [[ "$(findings_get 0 severity)" == "info" ]] || fail "Severity for updates available must be info"
+  [[ "$(findings_get 0 title)" == "Pending package updates detected" ]] || fail "Title should report pending updates"
+
+  # 6. Verify non-interactive arguments and stdin redirection with clean exit 0
   cat >"$bin_dir/dnf" <<'EOF'
 #!/usr/bin/env bash
 # Verify stdin is not an interactive terminal
