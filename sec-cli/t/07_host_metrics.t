@@ -180,36 +180,123 @@ EOF
     is($mounts->[2]->{mount_point}, '/mnt/back\\slash', "Octal backslash \\134 unescaped to backslash");
 }
 
-# --- 8. Mount option parsing and superblock options ---
+# --- 8. FIX-01: Correct mount security flag semantics (per-mount vs superblock) ---
 {
-    my $mountinfo_opts = File::Spec->catfile($tmp_dir, 'mountinfo_opts');
-    open(my $fh, '>', $mountinfo_opts) or die "Cannot write: $!";
-    print $fh <<'EOF';
-200 40 0:50 / /var/tmp rw,relatime shared:20 - tmpfs tmpfs rw,nosuid,nodev,noexec,size=2048k
-201 40 0:51 / /opt rw,nodev shared:21 - ext4 /dev/sde1 rw,nosuid,noexec
+    # Fixture A: 'noexec' appears ONLY in superblock options (field 11), NOT in mount options (field 6)
+    my $file_super_only = File::Spec->catfile($tmp_dir, 'mountinfo_super_only');
+    open(my $fhA, '>', $file_super_only) or die "Cannot write: $!";
+    print $fhA <<'EOF';
+300 40 8:1 / /mnt/super_noexec rw,relatime shared:30 - ext4 /dev/sda1 rw,noexec,data=ordered
 EOF
-    close($fh);
+    close($fhA);
 
-    my ($mounts, $errs) = LSA::SecEng::HostMetrics::parse_mountinfo($mountinfo_opts);
-    ok(!$errs, "Mount options parsed successfully");
+    my ($mountsA, $errsA) = LSA::SecEng::HostMetrics::parse_mountinfo($file_super_only);
+    ok(!$errsA, "Parsed super_only fixture without error");
+    my $mA = $mountsA->[0];
+    is($mA->{noexec}, JSON::PP::false, "Per-mount noexec is FALSE when noexec only appears in superblock options");
+    is($mA->{flags}->{noexec}, JSON::PP::false, "Nested flags->noexec is FALSE when noexec only in superblock");
+    ok((grep { $_ eq 'noexec' } @{$mA->{super_options}}), "noexec is preserved in raw super_options telemetry");
 
-    # In entry 200, nodev/nosuid/noexec are in superblock options (after - tmpfs tmpfs)
-    my $m0 = $mounts->[0];
-    is($m0->{nodev}, JSON::PP::true, "Superblock nodev recognized");
-    is($m0->{nosuid}, JSON::PP::true, "Superblock nosuid recognized");
-    is($m0->{noexec}, JSON::PP::true, "Superblock noexec recognized");
-    is($m0->{flags}->{nodev}, JSON::PP::true, "Nested flags->nodev recognized");
-    is($m0->{flags}->{nosuid}, JSON::PP::true, "Nested flags->nosuid recognized");
-    is($m0->{flags}->{noexec}, JSON::PP::true, "Nested flags->noexec recognized");
+    # Fixture B: 'noexec' appears in per-mount options (field 6)
+    my $file_mount_only = File::Spec->catfile($tmp_dir, 'mountinfo_mount_only');
+    open(my $fhB, '>', $file_mount_only) or die "Cannot write: $!";
+    print $fhB <<'EOF';
+301 40 8:1 / /mnt/mount_noexec rw,noexec,relatime shared:31 - ext4 /dev/sda1 rw,data=ordered
+EOF
+    close($fhB);
 
-    # In entry 201, nodev is per-mount and nosuid,noexec are superblock
-    my $m1 = $mounts->[1];
-    is($m1->{nodev}, JSON::PP::true, "Per-mount nodev recognized");
-    is($m1->{nosuid}, JSON::PP::true, "Superblock nosuid recognized");
-    is($m1->{noexec}, JSON::PP::true, "Superblock noexec recognized");
+    my ($mountsB, $errsB) = LSA::SecEng::HostMetrics::parse_mountinfo($file_mount_only);
+    ok(!$errsB, "Parsed mount_only fixture without error");
+    my $mB = $mountsB->[0];
+    is($mB->{noexec}, JSON::PP::true, "Per-mount noexec is TRUE when noexec appears in per-mount options");
+    is($mB->{flags}->{noexec}, JSON::PP::true, "Nested flags->noexec is TRUE when noexec in per-mount options");
+
+    # Fixture C: 'nodev' and 'nosuid' appear only in superblock options vs per-mount options
+    my $file_super_nodev = File::Spec->catfile($tmp_dir, 'mountinfo_super_nodev');
+    open(my $fhC, '>', $file_super_nodev) or die "Cannot write: $!";
+    print $fhC <<'EOF';
+302 40 8:1 / /mnt/super_nodev rw,relatime shared:32 - ext4 /dev/sda1 rw,nodev,nosuid
+EOF
+    close($fhC);
+
+    my ($mountsC, $errsC) = LSA::SecEng::HostMetrics::parse_mountinfo($file_super_nodev);
+    ok(!$errsC, "Parsed super_nodev fixture without error");
+    my $mC = $mountsC->[0];
+    is($mC->{nodev}, JSON::PP::false, "nodev is FALSE when only in superblock options");
+    is($mC->{nosuid}, JSON::PP::false, "nosuid is FALSE when only in superblock options");
+
+    my $file_mount_nodev = File::Spec->catfile($tmp_dir, 'mountinfo_mount_nodev');
+    open(my $fhD, '>', $file_mount_nodev) or die "Cannot write: $!";
+    print $fhD <<'EOF';
+303 40 8:1 / /mnt/mount_nodev rw,nodev,nosuid,relatime shared:33 - ext4 /dev/sda1 rw
+EOF
+    close($fhD);
+
+    my ($mountsD, $errsD) = LSA::SecEng::HostMetrics::parse_mountinfo($file_mount_nodev);
+    ok(!$errsD, "Parsed mount_nodev fixture without error");
+    my $mD = $mountsD->[0];
+    is($mD->{nodev}, JSON::PP::true, "nodev is TRUE when in per-mount options");
+    is($mD->{nosuid}, JSON::PP::true, "nosuid is TRUE when in per-mount options");
 }
 
-# --- 9. Missing or unreadable input files ---
+# --- 9. FIX-02: Strict mountinfo field validation & fail-closed behavior ---
+{
+    # 9a. Non-numeric mount ID
+    my $f_bad_id = File::Spec->catfile($tmp_dir, 'bad_mount_id');
+    open(my $fh1, '>', $f_bad_id) or die "Cannot write: $!";
+    print $fh1 "abc 40 0:27 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw\n";
+    close($fh1);
+    my ($m1, $e1) = LSA::SecEng::HostMetrics::parse_mountinfo($f_bad_id);
+    ok(!defined $m1, "Non-numeric mount ID rejected");
+    like($e1->[0], qr/invalid numeric mount ID/, "Error flags invalid mount ID");
+
+    # 9b. Non-numeric parent ID
+    my $f_bad_parent = File::Spec->catfile($tmp_dir, 'bad_parent_id');
+    open(my $fh2, '>', $f_bad_parent) or die "Cannot write: $!";
+    print $fh2 "42 xyz 0:27 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw\n";
+    close($fh2);
+    my ($m2, $e2) = LSA::SecEng::HostMetrics::parse_mountinfo($f_bad_parent);
+    ok(!defined $m2, "Non-numeric parent ID rejected");
+    like($e2->[0], qr/invalid numeric parent ID/, "Error flags invalid parent ID");
+
+    # 9c. Invalid device identifier
+    my $f_bad_dev = File::Spec->catfile($tmp_dir, 'bad_dev');
+    open(my $fh3, '>', $f_bad_dev) or die "Cannot write: $!";
+    print $fh3 "42 40 bad_dev_format / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw\n";
+    close($fh3);
+    my ($m3, $e3) = LSA::SecEng::HostMetrics::parse_mountinfo($f_bad_dev);
+    ok(!defined $m3, "Invalid device format rejected");
+    like($e3->[0], qr/invalid device identifier/, "Error flags invalid device identifier");
+
+    # 9d. Invalid mount point (not starting with /)
+    my $f_bad_mp = File::Spec->catfile($tmp_dir, 'bad_mp');
+    open(my $fh4, '>', $f_bad_mp) or die "Cannot write: $!";
+    print $fh4 "42 40 0:27 / relative_path rw,nosuid,nodev - tmpfs tmpfs rw\n";
+    close($fh4);
+    my ($m4, $e4) = LSA::SecEng::HostMetrics::parse_mountinfo($f_bad_mp);
+    ok(!defined $m4, "Relative mount point rejected");
+    like($e4->[0], qr/invalid mount point/, "Error flags invalid mount point");
+
+    # 9e. Missing '-' separator
+    my $f_no_sep = File::Spec->catfile($tmp_dir, 'no_sep');
+    open(my $fh5, '>', $f_no_sep) or die "Cannot write: $!";
+    print $fh5 "42 40 0:27 / /dev/shm rw,nosuid,nodev tmpfs tmpfs rw\n";
+    close($fh5);
+    my ($m5, $e5) = LSA::SecEng::HostMetrics::parse_mountinfo($f_no_sep);
+    ok(!defined $m5, "Missing '-' separator rejected");
+    like($e5->[0], qr/missing '-' separator/, "Error flags missing separator");
+
+    # 9f. Truncated fields after '-' separator
+    my $f_trunc = File::Spec->catfile($tmp_dir, 'trunc_after_sep');
+    open(my $fh6, '>', $f_trunc) or die "Cannot write: $!";
+    print $fh6 "42 40 0:27 / /dev/shm rw,nosuid,nodev - tmpfs\n";
+    close($fh6);
+    my ($m6, $e6) = LSA::SecEng::HostMetrics::parse_mountinfo($f_trunc);
+    ok(!defined $m6, "Truncated fields after '-' separator rejected");
+    like($e6->[0], qr/truncated fields after '-' separator/, "Error flags truncated fields");
+}
+
+# --- 10. Missing or unreadable input files ---
 {
     my ($data_m, $err_m) = LSA::SecEng::HostMetrics::collect_host_metrics(
         meminfo_path   => "$tmp_dir/nonexistent_meminfo",
@@ -238,7 +325,7 @@ EOF
     is($err_mnt->{code}, 3, "Exit code is 3 for missing mountinfo file");
 }
 
-# --- 10. Output envelope structure and full collection ---
+# --- 11. Output envelope structure and full collection ---
 {
     my ($data, $err) = LSA::SecEng::HostMetrics::collect_host_metrics(
         meminfo_path   => "$tmp_dir/meminfo_valid",
@@ -255,28 +342,32 @@ EOF
     is(ref($data->{mounts}), 'ARRAY', "mounts is an array reference");
 }
 
-# --- 11. Correct CLI exit codes ---
+# --- 12. Correct CLI exit codes and live Linux smoke test ---
 {
-    # Exit 0 on valid invocation on current system
-    my $cli_out = `$bin host-metrics --format json`;
-    is($?, 0, "sec-cli host-metrics exits with 0 on live system");
-    my $json = eval { JSON::PP->new->decode($cli_out) };
-    ok(defined $json, "CLI output is valid JSON");
-    is($json->{'$schema'}, 'https://lsa.security/schemas/sec-ops.v1.json', "Schema is sec-ops.v1.json");
-    is($json->{schema_version}, '1.0.0', "schema_version is 1.0.0");
-    is($json->{component}, 'sec-cli', "component is sec-cli");
-    is($json->{command}, 'host-metrics', "command is host-metrics");
-    is($json->{status}, 'success', "status is success");
-    is($json->{exit_code}, 0, "exit_code is 0");
-    ok($json->{data}->{mem_total_kib} > 0, "mem_total_kib is positive");
-    ok($json->{data}->{mount_count} > 0, "mount_count is positive");
+    # Optional live Linux smoke test
+    if (-r '/proc/meminfo' && -r '/proc/loadavg' && -r '/proc/self/mountinfo') {
+        my $cli_out = `$bin host-metrics --format json`;
+        is($?, 0, "sec-cli host-metrics exits with 0 on live system");
+        my $json = eval { JSON::PP->new->decode($cli_out) };
+        ok(defined $json, "CLI output is valid JSON");
+        is($json->{'$schema'}, 'https://lsa.security/schemas/sec-ops.v1.json', "Schema is sec-ops.v1.json");
+        is($json->{schema_version}, '1.0.0', "schema_version is 1.0.0");
+        is($json->{component}, 'sec-cli', "component is sec-cli");
+        is($json->{command}, 'host-metrics', "command is host-metrics");
+        is($json->{status}, 'success', "status is success");
+        is($json->{exit_code}, 0, "exit_code is 0");
+        ok($json->{data}->{mem_total_kib} > 0, "mem_total_kib is positive");
+        ok($json->{data}->{mount_count} > 0, "mount_count is positive");
 
-    # Text format output
-    my $cli_text = `$bin host-metrics --format text`;
-    is($?, 0, "sec-cli host-metrics --format text exits with 0");
-    like($cli_text, qr/Memory \(KiB\):/, "Text output includes Memory header");
-    like($cli_text, qr/Load Average:/, "Text output includes Load Average");
-    like($cli_text, qr/Mounts \(\d+ total\):/, "Text output includes Mounts list");
+        # Text format output
+        my $cli_text = `$bin host-metrics --format text`;
+        is($?, 0, "sec-cli host-metrics --format text exits with 0");
+        like($cli_text, qr/Memory \(KiB\):/, "Text output includes Memory header");
+        like($cli_text, qr/Load Average:/, "Text output includes Load Average");
+        like($cli_text, qr/Mounts \(\d+ total\):/, "Text output includes Mounts list");
+    } else {
+        pass("Skipping live /proc inspection: kernel interfaces not readable in test environment");
+    }
 
     # Exit 2 on invalid usage (unexpected arguments)
     my $err_out = `$bin host-metrics unexpected_arg --format json 2>&1`;
@@ -291,23 +382,23 @@ EOF
     is($? >> 8, 2, "sec-cli host-metrics with invalid format exits with code 2");
 }
 
-# --- 12. Existing six commands remain fully compatible ---
+# --- 13. FIX-04: Existing commands remain fully compatible without network/DNS reliance ---
 {
     # 1. hash
     my $h_out = `$bin hash $bin --format json`;
     is($?, 0, "sec-cli hash remains operational");
 
-    # 2. dns
-    my $d_out = `$bin dns localhost --format json`;
-    is($?, 0, "sec-cli dns remains operational");
+    # 2. dns usage (deterministic, no network call)
+    my $d_usage = `$bin dns 2>&1`;
+    is($? >> 8, 2, "sec-cli dns usage intact without network calls");
 
     # 3. log
     my $l_out = `$bin log "Sprint 04 telemetry test" --format json`;
     is($?, 0, "sec-cli log remains operational");
 
-    # 4. tcp-check (help/usage)
+    # 4. tcp-check (usage, no network call)
     my $tcp_usage = `$bin tcp-check 2>&1`;
-    is($? >> 8, 2, "sec-cli tcp-check usage intact");
+    is($? >> 8, 2, "sec-cli tcp-check usage intact without network calls");
 
     # 5. integrity-init (help/usage)
     my $init_usage = `$bin integrity-init 2>&1`;

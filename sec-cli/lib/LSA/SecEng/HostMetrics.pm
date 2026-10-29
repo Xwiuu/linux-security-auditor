@@ -9,6 +9,7 @@ our $VERSION = '1.0.0';
 sub unescape_octal_path {
     my ($str) = @_;
     return '' unless defined $str;
+    # Linux kernel escapes space, tab, newline, backslash as \ooo (octal)
     $str =~ s/\\([0-7]{3})/chr(oct($1))/eg;
     return $str;
 }
@@ -39,21 +40,27 @@ sub parse_meminfo {
         next if $line =~ /^\s*$/;
 
         if ($line =~ /^([A-Za-z0-9_()]+):\s*(.*)$/) {
-            my $key = $1;
+            my $key  = $1;
             my $rest = $2;
 
-            # Only process keys of interest or store all
             if ($rest =~ /^([0-9]+)(?:\s+kB)?$/) {
                 $raw_fields{$key} = int($1);
             } else {
-                # If this is one of our required keys and the value is not digits:
+                # If this is one of our required keys and value is non-numeric:
                 if ($key =~ /^(?:MemTotal|MemAvailable|MemFree|SwapTotal|SwapFree)$/) {
                     push @errors, "Malformed numeric value for '$key' at $path line $line_num: '$rest'";
                 }
             }
         }
     }
-    close($fh);
+
+    if (!eof($fh)) {
+        close($fh);
+        return (undef, ["Incomplete read of '$path': read error occurred"]);
+    }
+    unless (close($fh)) {
+        return (undef, ["Error closing filehandle for '$path': $!"]);
+    }
 
     if (@errors) {
         return (undef, \@errors);
@@ -98,7 +105,13 @@ sub parse_loadavg {
     }
 
     my $line = <$fh>;
-    close($fh);
+    if (!defined $line && !eof($fh)) {
+        close($fh);
+        return (undef, ["Incomplete read of '$path': read error occurred"]);
+    }
+    unless (close($fh)) {
+        return (undef, ["Error closing filehandle for '$path': $!"]);
+    }
 
     unless (defined $line && length($line)) {
         return (undef, ["Empty load average file: '$path'"]);
@@ -157,43 +170,86 @@ sub parse_mountinfo {
 
         my @tokens = split /\s+/, $line;
         if (@tokens < 7) {
-            push @errors, "Malformed mountinfo line $line_num in '$path': expected at least 7 fields";
+            push @errors, "Malformed mountinfo line $line_num in '$path': expected at least 7 fields before separator";
             next;
         }
 
         my $mount_id    = $tokens[0];
         my $parent_id   = $tokens[1];
         my $major_minor = $tokens[2];
-        my $mount_root  = unescape_octal_path($tokens[3]);
-        my $mount_point = unescape_octal_path($tokens[4]);
+        my $raw_root    = $tokens[3];
+        my $raw_mp      = $tokens[4];
         my $mount_opts_raw = $tokens[5];
 
-        # Find separator '-'
+        # Strict validation of structural identifiers
+        unless ($mount_id =~ /^[0-9]+$/) {
+            push @errors, "Malformed mountinfo line $line_num in '$path': invalid numeric mount ID '$mount_id'";
+            next;
+        }
+        unless ($parent_id =~ /^[0-9]+$/) {
+            push @errors, "Malformed mountinfo line $line_num in '$path': invalid numeric parent ID '$parent_id'";
+            next;
+        }
+        unless ($major_minor =~ /^[0-9]+:[0-9]+$/) {
+            push @errors, "Malformed mountinfo line $line_num in '$path': invalid device identifier '$major_minor'";
+            next;
+        }
+
+        my $mount_root  = unescape_octal_path($raw_root);
+        my $mount_point = unescape_octal_path($raw_mp);
+
+        unless (length($mount_root) > 0) {
+            push @errors, "Malformed mountinfo line $line_num in '$path': empty mount root";
+            next;
+        }
+        unless (length($mount_point) > 0 && $mount_point =~ m{^/}) {
+            push @errors, "Malformed mountinfo line $line_num in '$path': invalid mount point '$mount_point'";
+            next;
+        }
+
+        # Locate structural separator '-'
         my $sep_idx = 6;
         while ($sep_idx < @tokens && $tokens[$sep_idx] ne '-') {
             $sep_idx++;
         }
 
-        if ($sep_idx >= @tokens || $sep_idx + 2 >= @tokens) {
-            push @errors, "Malformed mountinfo line $line_num in '$path': missing '-' separator or filesystem fields";
+        if ($sep_idx >= @tokens) {
+            push @errors, "Malformed mountinfo line $line_num in '$path': missing '-' separator";
             next;
         }
 
-        my $fs_type      = $tokens[$sep_idx + 1];
-        my $mount_source = unescape_octal_path($tokens[$sep_idx + 2]);
-        my $super_opts_raw = ($sep_idx + 3 < @tokens) ? $tokens[$sep_idx + 3] : '';
+        # After '-', Linux mountinfo requires filesystem type, mount source, and super options
+        if ($sep_idx + 3 >= @tokens) {
+            push @errors, "Malformed mountinfo line $line_num in '$path': truncated fields after '-' separator (expected filesystem type, mount source, and superblock options)";
+            next;
+        }
+
+        my $fs_type        = $tokens[$sep_idx + 1];
+        my $mount_source   = unescape_octal_path($tokens[$sep_idx + 2]);
+        my $super_opts_raw = $tokens[$sep_idx + 3];
+
+        unless (length($fs_type) > 0) {
+            push @errors, "Malformed mountinfo line $line_num in '$path': empty filesystem type";
+            next;
+        }
+        unless (length($mount_source) > 0) {
+            push @errors, "Malformed mountinfo line $line_num in '$path': empty mount source";
+            next;
+        }
 
         my @mount_opts = split /,/, $mount_opts_raw;
         my @super_opts = length($super_opts_raw) ? split(/,/, $super_opts_raw) : ();
 
-        my %opts_set;
-        for my $opt (@mount_opts, @super_opts) {
-            $opts_set{$opt} = 1;
-        }
+        # FIX-01: Derive mount security flags exclusively from per-mount options (field 6).
+        # In /proc/[pid]/mountinfo:
+        # - Field 6 contains per-mount options bound to the specific mount point (MS_NOSUID, MS_NODEV, MS_NOEXEC).
+        # - Field 11 contains per-superblock options shared by all mounts of the filesystem.
+        # Superblock options must never be unioned or promoted into per-mount security flags.
+        my %mount_opts_set = map { $_ => 1 } @mount_opts;
 
-        my $has_nodev  = exists $opts_set{nodev}  ? JSON::PP::true : JSON::PP::false;
-        my $has_nosuid = exists $opts_set{nosuid} ? JSON::PP::true : JSON::PP::false;
-        my $has_noexec = exists $opts_set{noexec} ? JSON::PP::true : JSON::PP::false;
+        my $has_nodev  = exists $mount_opts_set{nodev}  ? JSON::PP::true : JSON::PP::false;
+        my $has_nosuid = exists $mount_opts_set{nosuid} ? JSON::PP::true : JSON::PP::false;
+        my $has_noexec = exists $mount_opts_set{noexec} ? JSON::PP::true : JSON::PP::false;
 
         push @mounts, {
             mount_id        => $mount_id,
@@ -216,7 +272,14 @@ sub parse_mountinfo {
             raw_entry       => $line,
         };
     }
-    close($fh);
+
+    if (!eof($fh)) {
+        close($fh);
+        return (undef, ["Incomplete read of '$path': read error occurred"]);
+    }
+    unless (close($fh)) {
+        return (undef, ["Error closing filehandle for '$path': $!"]);
+    }
 
     if (@errors) {
         return (undef, \@errors);
