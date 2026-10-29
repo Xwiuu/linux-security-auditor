@@ -1,13 +1,49 @@
 #!/usr/bin/env bash
 
+# RFC 8259 Section 7 requires escaping quotation mark, reverse solidus,
+# and control characters U+0000 through U+001F.
+# Note: Bash variables cannot hold NUL bytes (0x00), which terminate C strings in Bash.
 json_escape() {
   local value="$1"
 
+  # Escape backslash and quotation mark first
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
+
+  # Standard two-character escape sequences
   value="${value//$'\n'/\\n}"
   value="${value//$'\r'/\\r}"
   value="${value//$'\t'/\\t}"
+  value="${value//$'\b'/\\b}"
+  value="${value//$'\f'/\\f}"
+
+  # Control characters U+0001 through U+001F in hex representation
+  value="${value//$'\x01'/\\u0001}"
+  value="${value//$'\x02'/\\u0002}"
+  value="${value//$'\x03'/\\u0003}"
+  value="${value//$'\x04'/\\u0004}"
+  value="${value//$'\x05'/\\u0005}"
+  value="${value//$'\x06'/\\u0006}"
+  value="${value//$'\x07'/\\u0007}"
+  value="${value//$'\x0b'/\\u000b}"
+  value="${value//$'\x0e'/\\u000e}"
+  value="${value//$'\x0f'/\\u000f}"
+  value="${value//$'\x10'/\\u0010}"
+  value="${value//$'\x11'/\\u0011}"
+  value="${value//$'\x12'/\\u0012}"
+  value="${value//$'\x13'/\\u0013}"
+  value="${value//$'\x14'/\\u0014}"
+  value="${value//$'\x15'/\\u0015}"
+  value="${value//$'\x16'/\\u0016}"
+  value="${value//$'\x17'/\\u0017}"
+  value="${value//$'\x18'/\\u0018}"
+  value="${value//$'\x19'/\\u0019}"
+  value="${value//$'\x1a'/\\u001a}"
+  value="${value//$'\x1b'/\\u001b}"
+  value="${value//$'\x1c'/\\u001c}"
+  value="${value//$'\x1d'/\\u001d}"
+  value="${value//$'\x1e'/\\u001e}"
+  value="${value//$'\x1f'/\\u001f}"
 
   printf '%s' "$value"
 }
