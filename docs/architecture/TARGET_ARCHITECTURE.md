@@ -1,6 +1,6 @@
 # Target Architecture: Linux Security & Infrastructure Management Platform
 
-**Status:** Proposed Architecture Baseline  
+**Status:** Tentative Architecture Baseline (Provisional Design)
 **Phase:** Sprint 00 Analysis  
 **Engineering Policy:** Strict YAGNI (You Aren't Gonna Need It) & Compatibility Over Elegance  
 **License:** MIT  
@@ -9,23 +9,21 @@
 
 ## 1. Architectural Philosophy & Principles
 
-To evolve Linux Security Auditor from a standalone Bash auditing script into an open-source Linux Security & Infrastructure Management Platform without violating strict YAGNI or breaking existing contracts, the target architecture adheres to six bedrock principles:
+To evolve Linux Security Auditor from a standalone Bash auditing script into an open-source Linux Security & Infrastructure Management Platform without violating strict YAGNI or breaking existing contracts, the proposed architecture adheres to the following principles:
 
-1. **Non-Breaking Monorepo:** The existing Bash codebase (`lsa`, `lib/`, `modules/`, `parsers/`, `reporters/`, `tui/`) remains intact as the baseline auditor. Existing CLI commands, options (`--format json|csv|text`), TUI, and installer/uninstaller continue to work identically.
-2. **Zero-Orchestration Local Invariant:** Every component must function locally as a self-contained binary or script. No component shall require a background daemon, message broker, Kubernetes cluster, or remote server to perform its primary function.
-3. **Strict Separation of Concerns:**
-   - **Bash:** Host configuration auditing and interactive terminal checks.
-   - **Perl:** Security engineering CLI (forensic checks, network diagnostics, hashing).
-   - **Rust (Collector):** High-performance read-only host and Docker infrastructure data extraction.
-   - **Rust (Backend):** Axum REST API, session authentication, RBAC, project management, and PostgreSQL database interaction.
-   - **Rust (Frontend):** Leptos WebAssembly SPA providing reactive dashboards without external JavaScript runtimes.
-4. **Read-Only Infrastructure Invariance:** Under no circumstances will Docker collectors or host collectors perform mutating operations (`POST`, `PUT`, `DELETE`, container exec, image build, network creation). Access to the Docker socket (`/var/run/docker.sock`) is strictly constrained to read-only `GET` endpoints.
-5. **Decoupled Database Boundaries:** CLI tools and collectors never connect to PostgreSQL. PostgreSQL is isolated strictly behind the Rust Axum backend.
-6. **Explicit Versioned Data Contracts:** Communication between components occurs via versioned JSON schemas, ensuring interoperability without runtime coupling.
+1. **Non-Breaking Monorepo:** The existing GNU Bash codebase (`lsa`, `lib/`, `modules/`, `parsers/`, `reporters/`, `tui/`) remains intact as the baseline auditor. Existing CLI commands, options (`--format json|csv|text`), TUI, and installer/uninstaller continue to work identically.
+2. **Zero-Orchestration Local Invariant:** Components must be capable of functioning locally as self-contained binaries or scripts where applicable. No component shall mandatorily require a background daemon, message broker, Kubernetes cluster, or remote server to perform basic local operations.
+3. **Pragmatic Technology Allocation:**
+   - **Bash:** Local host configuration auditing and interactive terminal checks.
+   - **Perl:** Security engineering CLI (forensic checks, network diagnostics, hashing). *Note: Perl availability varies on minimal or containerized Linux environments.*
+   - **Rust (Tentative Platform):** Strategic platform language for high-performance collectors, backend API (Axum), and reactive web frontend (Leptos / WebAssembly). Note: WebAssembly execution in browser environments requires a JavaScript bootstrap loader and associated build tooling.
+4. **Decoupled Database Boundaries:** CLI tools and collectors never connect directly to PostgreSQL. PostgreSQL access is isolated strictly behind the backend service.
+5. **Explicit Versioned Data Contracts:** Communication between components occurs via versioned JSON schemas, ensuring interoperability without runtime coupling.
+6. **Strict YAGNI Phasing:** Multi-crate splits, background daemons, or helper processes are tentative architectural options. They will be introduced only when justified by concrete functional evidence and validated requirements.
 
 ---
 
-## 2. Monorepo Structure
+## 2. Monorepo Structure (Provisional)
 
 ```
 linux-security-auditor/
@@ -41,31 +39,31 @@ linux-security-auditor/
 │   ├── check.sh                # Existing Bash quality gate (untouched)
 │   └── check-all.sh            # (Future) Quality gate runner invoking language checks
 │
-├── sec-cli/                    # [Perl] Security Engineering CLI
+├── sec-cli/                    # [Perl] Security Engineering CLI (Sprint 01 target)
 │   ├── bin/
 │   │   └── sec-cli             # Main Perl CLI entrypoint
 │   ├── lib/
 │   │   └── LSA/
 │   │       ├── SecEng/
-│   │       │   ├── DNS.pm      # DNS lookup with strict timeouts
+│   │       │   ├── DNS.pm      # DNS lookup
 │   │       │   ├── TCP.pm      # TCP connectivity checks
 │   │       │   ├── Hash.pm     # Streaming SHA-256 hashing
 │   │       │   └── Logger.pm   # Structured JSON logger
 │   │       └── Schema.pm       # Output JSON envelope validator
 │   └── t/                      # Perl Test::More test suites
 │
-├── rust/                       # [Rust] Platform Backend, Collector & Web UI
-│   ├── Cargo.toml              # Cargo workspace definition
+├── rust/                       # [Rust] Tentative Platform (Future Sprints)
+│   ├── Cargo.toml              # (Tentative) Cargo workspace definition
 │   └── crates/
-│       ├── lsa-core/           # Shared models, JSON schemas, validation logic
-│       ├── lsa-collector/      # Read-only host & Docker socket collector binary
-│       ├── lsa-backend/        # Axum HTTP API, Auth/RBAC, PostgreSQL storage
-│       └── lsa-frontend/       # Leptos WebAssembly SPA
+│       ├── lsa-core/           # (Tentative) Shared models & validation logic
+│       ├── lsa-collector/      # (Tentative) Read-only host telemetry binary
+│       ├── lsa-backend/        # (Tentative) Axum HTTP API, Auth/RBAC, PostgreSQL storage
+│       └── lsa-frontend/       # (Tentative) Leptos WebAssembly SPA
 │
 ├── schemas/                    # JSON Schema specifications
 │   ├── findings.v1.json        # Bash finding engine schema
 │   ├── sec-ops.v1.json         # Perl Security Engineering schema
-│   ├── collector.v1.json       # Host & Docker telemetry schema
+│   ├── collector.v1.json       # Host telemetry schema
 │   └── audit-report.v2.json    # Consolidated multi-module platform report
 │
 └── docs/                       # Architecture, security, and development docs
@@ -83,14 +81,13 @@ linux-security-auditor/
             ▼ CLI                       ▼ CLI                  ▼ Browser
 ┌───────────────────────┐   ┌───────────────────────┐   ┌───────────────────────┐
 │     Existing LSA      │   │     sec-cli (Perl)    │   │  Web UI (Leptos/WASM) │
-│     (Bash v1.0.0)     │   │ Security Engineering  │   │     [lsa-frontend]    │
+│     (Bash v1.0.0)     │   │ Security Engineering  │   │     [Tentative]       │
 └───────────┬───────────┘   └───────────┬───────────┘   └───────────┬───────────┘
             │                           │                           │
             │ JSON v1                   │ JSON v1                   │ HTTP REST
             ▼                           ▼                           ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│                  Platform Backend Service (Rust / Axum)                │
-│                            [lsa-backend]                               │
+│             Platform Backend Service (Rust / Axum) [Tentative]         │
 │  - Session Authentication & RBAC (Admin, Auditor, Viewer)              │
 │  - Project & Target Manager                                            │
 │  - Ingestion Pipeline for Bash / Perl / Collector JSON Reports         │
@@ -99,43 +96,42 @@ linux-security-auditor/
                     ▼                               ▼
        ┌────────────────────────┐      ┌────────────────────────┐
        │   PostgreSQL Database  │      │  lsa-collector (Rust)  │
-       │  (Users, RBAC, Audits) │      │  - Read-only /proc     │
-       └────────────────────────┘      │  - Read-only Docker    │
-                                       └────────────────────────┘
+       │  (Users, RBAC, Audits) │      │      [Tentative]       │
+       └────────────────────────┘      └────────────────────────┘
 ```
 
 ### 3.1. Bash Auditor (`lsa`)
-- **Boundary:** Audits local Linux host configuration.
+- **Boundary:** Audits local Linux host configuration using GNU Bash (Bash 4+).
 - **Contract:** Emits plain text, CSV, or `findings.v1.json`.
 - **Invariance:** Stays 100% backward compatible. No breaking changes to existing CLI flags or scripts.
 
 ### 3.2. Security Engineering CLI (`sec-cli`, Perl)
 - **Boundary:** Network diagnostics and cryptographic primitives (DNS lookup, TCP reachability, SHA-256 file hashing, structured logging).
 - **Execution:** Pure standard Perl core modules (`Socket`, `IO::Socket::IP`, `Digest::SHA`, `Getopt::Long`, `JSON::PP`).
-- **Zero External Dependencies:** No CPAN installation required. Standard Perl 5.32+ on any Linux distribution.
+- **Dependencies:** Standard Perl core only. Note: While Perl is widely installed on standard enterprise distros, its availability varies across minimal, containerized, or appliance Linux images.
 - **Contract:** Emits `sec-ops.v1.json` envelope with explicit exit codes and error structures.
-- **Scope Note:** File integrity baselining and verification are scheduled for a subsequent sprint.
+- **Scope Note:** File integrity baselining and verification are deferred to a subsequent sprint.
 
-### 3.3. Infrastructure Collector (`lsa-collector`, Rust)
-- **Boundary:** High-performance, memory-safe, read-only system metrics and Docker container metadata.
-- **Host Collector:** Reads `/proc`, `/sys`, and `/etc` with non-blocking I/O.
-- **Docker Collector:** Communicates with `/var/run/docker.sock` over a local UNIX domain socket via HTTP `GET` only. Never modifies containers or images.
+### 3.3. Infrastructure Collector (`lsa-collector`, Rust - Tentative)
+- **Boundary:** High-performance, memory-safe, read-only system metrics extraction.
+- **Host Collector:** Reads `/proc`, `/sys`, and `/etc` directly.
+- **YAGNI Provision:** Introduced only when proven necessary over existing shell collection.
 
-### 3.4. Secure Backend (`lsa-backend`, Rust & Axum)
+### 3.4. Secure Backend (`lsa-backend`, Rust & Axum - Tentative)
 - **Boundary:** Manages user authentication, Project Management, and RBAC authorization.
 - **Storage:** Sole component authorized to connect to PostgreSQL.
-- **Ingestion API:** Exposes endpoints to ingest audit JSON outputs from `lsa`, `sec-cli`, and `lsa-collector`.
+- **Ingestion API:** Exposes endpoints to ingest audit JSON outputs from `lsa`, `sec-cli`, and collectors.
 
-### 3.5. Web Frontend (`lsa-frontend`, Rust & Leptos WASM)
+### 3.5. Web Frontend (`lsa-frontend`, Rust & Leptos WASM - Tentative)
 - **Boundary:** Browser-based single-page application compiled to WebAssembly.
-- **Security:** Renders data strictly inside the browser sandbox; communicates with `lsa-backend` over JSON REST APIs with CSRF and Bearer token protection.
+- **Runtime:** Requires a JavaScript bootstrap loader and associated build tooling in browser environments. Communicates with `lsa-backend` over JSON REST APIs.
 
 ---
 
 ## 4. Local Execution Model & Process Invocation
 
 ### 4.1. Local Execution Invariant
-Each CLI component (`lsa`, `sec-cli`, `lsa-collector`) is directly executable on the command line without background services:
+Each CLI component (`lsa`, `sec-cli`) is directly executable on the command line without background services:
 ```bash
 # 1. Existing Bash auditor
 ./lsa audit --format json --output report.json
@@ -143,97 +139,70 @@ Each CLI component (`lsa`, `sec-cli`, `lsa-collector`) is directly executable on
 # 2. Perl Security Engineering CLI (Sprint 01)
 ./sec-cli/bin/sec-cli hash /etc/passwd --algo sha256
 ./sec-cli/bin/sec-cli tcp-check 127.0.0.1 22 --timeout 3
-./sec-cli/bin/sec-cli dns localhost --timeout 2
-
-# 3. Rust Collector (Future)
-./rust/target/release/lsa-collector --docker-only --format json
+./sec-cli/bin/sec-cli dns localhost
 ```
 
-### 4.2. Safe Subprocess Handling & Error Propagation
-When any component must invoke system binaries (e.g., `visudo`, `ss`, `ip`):
+### 4.2. Subprocess Handling & Timeout Policy
+When invoking external processes or network operations:
 1. **No Shell Interpolation:** Always invoke binaries using argument vector arrays (`execve`, `system(@args)`, `std::process::Command::new()`). Never pass concatenated strings to `/bin/sh -c`.
-2. **Explicit Timeouts:** Every external process invocation must be bounded by a non-blocking timeout (e.g., `alarm` in Perl, `tokio::time::timeout` in Rust). If a process exceeds the deadline, it is terminated with `SIGTERM` followed by `SIGKILL`, returning exit code `124`.
+2. **Unified Timeout Policy:**
+   - **TCP Connect Timeout:** Default is 3 seconds; maximum configurable is 10 seconds.
+   - **DNS Resolver Timeout:** Implementation-dependent. Because blocking system resolver calls (e.g. C library `getaddrinfo`) cannot be guaranteed to terminate on a hard deadline across all libc/thread implementations, application-level timeout requests must not be described as guaranteeing a hard deadline without verified low-level support.
+   - **Exit Code 124:** Returned only when an actual timeout condition has been established.
 3. **Standardized Process Exit Codes:**
-   - `0`: Success / Audit Clean (no high/critical findings).
-   - `1`: Warning / Findings Detected (audit identified policy violations).
-   - `2`: CLI Usage / Syntax Error (invalid parameters or arguments).
+   - `0`: Success / Audit Clean.
+   - `1`: Warning / Findings Detected.
+   - `2`: CLI Usage / Syntax Error.
    - `3`: Environmental / Dependency Failure (permission denied, command not found).
-   - `124`: Execution Timeout.
+   - `124`: Execution Timeout (only when timeout condition is positively established).
 
 ---
 
 ## 5. Host Data Collection Architecture
 
-```
-Host Operating System
-├── /proc/             ──[Direct Read-Only VFS]──► lsa-collector (Rust)
-│   ├── /proc/cpuinfo
-│   ├── /proc/meminfo
-│   ├── /proc/net/tcp
-│   └── /proc/[pid]/...
-│
-├── /etc/              ──[Read-Only File Checks]──► lsa (Bash) / sec-cli (Perl)
-│   ├── /etc/passwd
-│   ├── /etc/shadow
-│   └── /etc/ssh/sshd_config
-│
-└── /var/run/docker.sock ──[GET Only over UDS]──► lsa-collector (Rust)
-```
-
-1. **Direct Kernel Interface Preference:** Where feasible, Rust collectors read directly from `/proc` and `/sys` rather than spawning external processes (`ps`, `ss`, `uptime`). This eliminates process creation overhead and prevents PATH spoofing.
+1. **Direct Kernel Interface Preference:** Where feasible, future native collectors read directly from `/proc` and `/sys` rather than spawning external processes.
 2. **Path Sanitization & Symlink Protections:**
-   - Paths must be validated against directory traversal (`..`).
-   - Use `O_NOFOLLOW` when opening sensitive system files to prevent symlink race conditions (TOCTOU).
+   - Pre-checking symlink status (e.g. `[[ -L "$file" ]]`) does **not** eliminate Time-of-Check to Time-of-Use (TOCTOU) race conditions between check and consumption.
+   - True symlink race elimination requires atomic operating-system primitives (such as `O_NOFOLLOW` or `openat2(..., RESOLVE_NO_SYMLINKS)`) at the open/read boundary.
 
 ---
 
-## 6. Read-Only Docker Collection Strategy
+## 6. Docker Security Boundary & Collection Strategy
 
-Accessing Docker information carries significant security risks if write operations are permitted. The target platform applies a strict read-only policy:
+Accessing the Docker daemon socket (`/var/run/docker.sock`) carries significant security implications:
 
-1. **UNIX Domain Socket Transport:** Connect to `unix:///var/run/docker.sock` directly via an HTTP client over UNIX sockets.
-2. **HTTP GET-Only Whitelist:**
-   - Allowed endpoints:
-     - `GET /v1.43/info` (Docker daemon configuration and OS info)
-     - `GET /v1.43/version` (API and engine version)
-     - `GET /v1.43/containers/json?all=true` (Listing active and stopped containers)
-     - `GET /v1.43/containers/{id}/json` (Detailed container inspection: security options, mounted volumes, read-only rootfs)
-     - `GET /v1.43/images/json` (Image inventory)
-   - Disallowed operations:
-     - Any `POST`, `PUT`, `DELETE` request.
-     - `POST /containers/create`, `POST /containers/{id}/start`, `POST /containers/{id}/exec`.
-     - Direct connection hijacking (`/attach`, `/exec/{id}/start`).
-3. **Graceful Degradation:** If `/var/run/docker.sock` does not exist or the current user lacks socket permissions, the collector outputs a structured status indicating Docker is not auditable.
+1. **High-Privilege Trust Boundary:** Access to `/var/run/docker.sock` provides root-equivalent control over the host operating system. A process with read/write access to this socket can create privileged containers, mount the host root filesystem (`-v /:/host`), and execute arbitrary code as root.
+2. **Application vs. Operating System Boundaries:**
+   - Restricting an internal API client to HTTP `GET` requests is an **application-level convention, NOT an operating-system-enforced security boundary**.
+   - If the process holding socket access is compromised, hijacked, or coerced, an adversary can issue raw HTTP `POST`/`DELETE` calls directly over the open file descriptor.
+3. **Prerequisite Least-Privilege Architecture:**
+   - Before any Docker integration is introduced, a verified least-privilege architecture must be established.
+   - Potential future architectural options (not approved dependencies) include:
+     - An independently enforced, out-of-process read-only socket proxy with kernel-enforced isolation.
+     - An isolated unprivileged daemon running with drop-privileges capabilities.
+4. **Sprint Invariant:** **Do not implement any Docker integration during this sprint.**
 
 ---
 
-## 7. Database Boundaries & Project Manager
+## 7. Database Boundaries & Project Manager (Tentative)
 
-The platform introduces multi-target project management and RBAC, backed by PostgreSQL.
+The platform envisions multi-target project management and RBAC backed by PostgreSQL.
 
 ### 7.1. Database Isolation Invariant
 - **No Direct CLI Connection:** Standalone scripts (`lsa`, `sec-cli`) NEVER connect to PostgreSQL.
-- **Backend Ownership:** Only `lsa-backend` connects to PostgreSQL via a connection pool (`sqlx`).
+- **Backend Ownership:** Only the backend service connects to PostgreSQL via a connection pool (`sqlx`).
 
 ### 7.2. Database Domain Boundaries
-1. **Auth & Identity Domain:**
-   - `users`: User identity, password hash (`Argon2id`), account status.
-   - `roles`: Role definitions (`Admin`, `Auditor`, `Viewer`).
-   - `permissions`: Fine-grained privileges (`project:read`, `audit:run`, `report:export`).
-2. **Project Management Domain:**
-   - `projects`: Logical organizational units (e.g., "Production Edge Clusters", "Internal Infrastructure").
-   - `targets`: Registered nodes (hostname, IP, OS, environment tags).
-3. **Audit & Compliance Domain:**
-   - `audit_runs`: Execution metadata (timestamp, target_id, triggered_by, status).
-   - `audit_findings`: Normalized finding records matching `findings.v1.json`.
-   - `docker_snapshots`: Read-only container security posture assessments.
+1. **Auth & Identity Domain:** `users`, `roles`, `permissions` (Argon2id password hashing).
+2. **Project Management Domain:** `projects`, `targets`.
+3. **Audit & Compliance Domain:** `audit_runs`, `audit_findings`.
 
 ---
 
 ## 8. Compatibility with Existing Reports
 
 The platform preserves all existing report artifacts without alteration:
-- **Bash Text Report:** `reporters/text.sh` output remains the default human-readable CLI view.
-- **Bash CSV Report:** `reporters/csv.sh` schema (`id,category,severity,title,description,expected,actual,recommendation`) remains unchanged.
-- **Bash JSON Report:** `reporters/json.sh` output format (`{"findings": [...]}`) is registered as `findings.v1.json`.
-- The Rust backend ingestion engine accepts `findings.v1.json` directly, converting legacy reports into platform database records without requiring any migration of existing Bash scripts.
+- **Bash Text Report:** [`reporters/text.sh`](file:///mnt/novovolume/Prg/linux-security-auditor/reporters/text.sh) remains the default human-readable CLI view.
+- **Bash CSV Report:** [`reporters/csv.sh`](file:///mnt/novovolume/Prg/linux-security-auditor/reporters/csv.sh) schema remains unchanged.
+- **Bash JSON Report:** [`reporters/json.sh`](file:///mnt/novovolume/Prg/linux-security-auditor/reporters/json.sh) output format (`{"findings": [...]}`) is registered as `findings.v1.json`.
+- Future ingestion pipelines will accept `findings.v1.json` directly, converting legacy reports into platform database records without requiring modifications to existing Bash scripts.

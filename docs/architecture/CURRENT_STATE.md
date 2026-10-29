@@ -12,15 +12,15 @@
 
 ## 1. Executive Summary
 
-Linux Security Auditor (LSA) v1.0.0 is an open-source, read-only system auditing utility implemented in POSIX/GNU Bash. Its objective is auditing security-sensitive Linux host configurations and generating structured findings across Text, JSON, and CSV formats, in addition to an interactive Terminal User Interface (TUI).
+Linux Security Auditor (LSA) v1.0.0 is an open-source, read-only system auditing utility implemented in GNU Bash (Bash 4+). It relies on bash-specific features—such as indexed arrays, regex matching, parameter substitutions, and `[[ ]]` test operators—and is distinct from standard POSIX `sh`. Its objective is auditing security-sensitive Linux host configurations and generating structured findings across Text, JSON, and CSV formats, in addition to an interactive Terminal User Interface (TUI).
 
-The repository adheres to disciplined shell scripting practices:
+The repository demonstrates disciplined shell scripting practices:
 - Enforced strict shell runtime settings (`set -Eeuo pipefail`) across all executables and test suites.
 - Static quality gates passing ShellCheck (`v0.11.0`) and `shfmt` (`v3.14.1`) with zero linting warnings.
 - Modular separation into CLI orchestrator, core finding engine, audit modules, log parsers, reporters, and TUI.
-- Zero host mutation during audit runs.
+- Read-only execution model during audit runs.
 
-Historical evidence from GitHub Actions run `38393876438` confirms a successful quality gate at the base commit `3f51a24329f10ddb5a1b71017284ef6db5676414`. Local quality gate execution (`./scripts/check.sh </dev/null`) confirmed that all 9 validation stages pass.
+Historical evidence from GitHub Actions run `38393876438` confirms a successful quality gate at the base commit `3f51a24329f10ddb5a1b71017284ef6db5676414`. Local quality gate execution (`./scripts/check.sh </dev/null`) independently confirmed that all 9 validation stages pass.
 
 ---
 
@@ -220,3 +220,7 @@ The following limitations were independently verified by inspecting the codebase
    - In `lsa` (lines 232-284), invoking these subcommands populates the internal `LSA_FINDINGS` array but never invokes a reporter (`render_text_findings`). They exit silently with code 0 and empty stdout.
 2. **Hardcoded Package Manager Assumption:**
    - `modules/updates.sh` directly invokes `dnf check-update` and `dnf updateinfo`. On Debian, Ubuntu, or Alpine systems, update audits report non-auditable `info` findings.
+3. **Subprocess Interactive Blocking:**
+   - In `modules/updates.sh`, `dnf check-update --quiet 2>&1` without closed stdin (`</dev/null`) or timeout causes `lsa audit` to halt waiting for interactive confirmation when untrusted repository keys require user input.
+
+*(Remediation of existing Bash module issues is tracked as a separate future hardening task outside of Sprint 01).*
