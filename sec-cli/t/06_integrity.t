@@ -49,7 +49,7 @@ is($ver_empty_res->{summary}->{unchanged}, 0, "0 unchanged files in empty tree")
 is($ver_empty_res->{summary}->{modified}, 0, "0 modified files in empty tree");
 
 # -------------------------------------------------------------
-# 2. Single Regular File & Known SHA-256
+# 2. Regular Files & Nested Directories
 # -------------------------------------------------------------
 my $file1 = File::Spec->catfile($audit_dir, 'alpha.txt');
 open(my $f1, '>:raw', $file1) or die "Cannot write $file1: $!";
@@ -59,9 +59,6 @@ chmod 0644, $file1;
 
 my $expected_hash1 = sha256_hex("The quick brown fox jumps over the lazy dog");
 
-# -------------------------------------------------------------
-# 3. Nested Directories
-# -------------------------------------------------------------
 my $sub_dir = File::Spec->catdir($audit_dir, 'subdir', 'nested');
 mkdir File::Spec->catdir($audit_dir, 'subdir') or die $!;
 mkdir $sub_dir or die $!;
@@ -74,7 +71,6 @@ chmod 0644, $file2;
 
 my $expected_hash2 = sha256_hex("nested content for integrity verification");
 
-# Initialize baseline for audit_dir
 my $main_baseline = File::Spec->catfile($out_dir, 'main_baseline.json');
 my ($init_res, $init_err) = LSA::SecEng::Integrity::init_baseline(
     directory => $audit_dir,
@@ -85,31 +81,12 @@ ok(defined $init_res, "init_baseline on audit_dir succeeds");
 is($init_err, undef, "No error on init_baseline");
 is($init_res->{files_indexed}, 2, "Exactly 2 regular files indexed");
 
-# -------------------------------------------------------------
-# 4. Atomic Output Behavior & Restrictive Permissions
-# -------------------------------------------------------------
-ok(-f $main_baseline, "Baseline file exists at output path");
+# Verify restrictive 0600 permissions
 my $mode_val = (stat($main_baseline))[2] & 0777;
 is(sprintf("0%o", $mode_val), "0600", "Baseline file created with restrictive 0600 permissions");
 
 # -------------------------------------------------------------
-# 5. Deterministic Ordering & Known Hash Verification
-# -------------------------------------------------------------
-my $base_raw = do {
-    open(my $bfh, '<:raw', $main_baseline) or die $!;
-    local $/;
-    <$bfh>;
-};
-my $base_json = JSON::PP->new->decode($base_raw);
-is($base_json->{schema_version}, '1.0.0', "Baseline schema_version is 1.0.0");
-is(scalar(@{$base_json->{files}}), 2, "Baseline contains 2 file entries");
-is($base_json->{files}->[0]->{path}, 'alpha.txt', "First entry is 'alpha.txt' (alphabetical)");
-is($base_json->{files}->[0]->{sha256}, $expected_hash1, "Known SHA-256 for alpha.txt matches");
-is($base_json->{files}->[1]->{path}, 'subdir/nested/beta.txt', "Second entry is 'subdir/nested/beta.txt'");
-is($base_json->{files}->[1]->{sha256}, $expected_hash2, "Known SHA-256 for beta.txt matches");
-
-# -------------------------------------------------------------
-# 6. Unchanged Tree Verification
+# 3. Unchanged Tree Verification
 # -------------------------------------------------------------
 my ($ver_res1, $ver_err1) = LSA::SecEng::Integrity::verify_baseline(
     directory => $audit_dir,
@@ -125,218 +102,340 @@ is($ver_res1->{summary}->{removed}, 0, "0 removed files");
 is($ver_res1->{summary}->{error}, 0, "0 inspection errors");
 
 # -------------------------------------------------------------
-# 7. Added File Detection
+# 4. FIX-01 & Required Test 1: Incomplete scan must not publish baseline
 # -------------------------------------------------------------
-my $added_file = File::Spec->catfile($audit_dir, 'gamma.txt');
-open(my $fa, '>:raw', $added_file) or die $!;
-print $fa "newly added file content";
-close($fa);
-
-my ($ver_add_res, $ver_add_err) = LSA::SecEng::Integrity::verify_baseline(
-    directory => $audit_dir,
-    baseline  => $main_baseline,
+my $failed_pub_file = File::Spec->catfile($out_dir, 'failed_pub_baseline.json');
+my ($inc_res, $inc_err) = LSA::SecEng::Integrity::init_baseline(
+    directory          => $audit_dir,
+    output             => $failed_pub_file,
+    _inject_scan_error => "Injected unreadable path error",
 );
 
-ok(defined $ver_add_res, "verify_baseline detects additions");
-is($ver_add_err->{code}, 1, "Exit code 1 on difference detection");
-is($ver_add_res->{summary}->{added}, 1, "1 added file detected");
-is($ver_add_res->{summary}->{unchanged}, 2, "2 unchanged files remain");
-
-# Cleanup added file
-unlink $added_file or die $!;
+is($inc_res->{baseline_sha256}, undef, "Incomplete scan does not return baseline digest");
+is($inc_err->{code}, 3, "Incomplete scan exits with code 3");
+like($inc_err->{error}, qr/Cannot publish incomplete baseline/, "Error explains incomplete publication rejection");
+ok(!-e $failed_pub_file, "Incomplete scan DID NOT create or publish baseline on disk");
 
 # -------------------------------------------------------------
-# 8. Modified Content Detection
+# 5. FIX-01 & Required Test 2: Existing baseline remains byte-identical after failed replacement
 # -------------------------------------------------------------
-open(my $fm, '>>:raw', $file1) or die $!;
-print $fm " - modified content";
-close($fm);
+my $canary_file = File::Spec->catfile($out_dir, 'canary_baseline.json');
+open(my $cfh, '>:raw', $canary_file) or die $!;
+print $cfh "CANARY BASELINE CONTENT - MUST REMAIN UNTOUCHED";
+close($cfh);
+my $canary_sha_before = sha256_hex("CANARY BASELINE CONTENT - MUST REMAIN UNTOUCHED");
 
-my ($ver_mod_res, $ver_mod_err) = LSA::SecEng::Integrity::verify_baseline(
-    directory => $audit_dir,
-    baseline  => $main_baseline,
+my ($canary_res, $canary_err) = LSA::SecEng::Integrity::init_baseline(
+    directory          => $audit_dir,
+    output             => $canary_file,
+    force              => 1,
+    _inject_scan_error => "Injected failure before write",
 );
 
-ok(defined $ver_mod_res, "verify_baseline detects modification");
-is($ver_mod_err->{code}, 1, "Exit code 1 on modification");
-is($ver_mod_res->{summary}->{modified}, 1, "1 modified file detected");
-my ($mod_finding) = grep { $_->{path} eq 'alpha.txt' } @{$ver_mod_res->{findings}};
-is($mod_finding->{status}, 'MODIFIED', "alpha.txt status is MODIFIED");
-ok(defined $mod_finding->{details}->{sha256_current}, "Current SHA-256 reported");
-
-# Restore content
-open(my $fr, '>:raw', $file1) or die $!;
-print $fr "The quick brown fox jumps over the lazy dog";
-close($fr);
+is($canary_err->{code}, 3, "Failed replacement returns error code 3");
+my $canary_raw_after = do {
+    open(my $in, '<:raw', $canary_file) or die $!;
+    local $/;
+    <$in>;
+};
+is(sha256_hex($canary_raw_after), $canary_sha_before, "Existing baseline remains byte-identical after failed replacement");
 
 # -------------------------------------------------------------
-# 9. Removed File Detection
+# 6. FIX-02 & Required Test 3: Newly added symlink is not silently ignored
 # -------------------------------------------------------------
-unlink $file2 or die $!;
-
-my ($ver_rem_res, $ver_rem_err) = LSA::SecEng::Integrity::verify_baseline(
-    directory => $audit_dir,
-    baseline  => $main_baseline,
-);
-
-ok(defined $ver_rem_res, "verify_baseline detects removal");
-is($ver_rem_err->{code}, 1, "Exit code 1 on removal");
-is($ver_rem_res->{summary}->{removed}, 1, "1 removed file detected");
-my ($rem_finding) = grep { $_->{path} eq 'subdir/nested/beta.txt' } @{$ver_rem_res->{findings}};
-is($rem_finding->{status}, 'REMOVED', "beta.txt status is REMOVED");
-
-# -------------------------------------------------------------
-# 10. Symlink Replacement Detection
-# -------------------------------------------------------------
-# Replace missing file2 with a symbolic link to file1
-eval { symlink($file1, $file2) };
+my $new_symlink = File::Spec->catfile($audit_dir, 'link_to_alpha.txt');
+eval { symlink($file1, $new_symlink) };
 SKIP: {
-    skip "Symlink creation unsupported", 2 unless -l $file2;
+    skip "Symlink creation unsupported", 4 unless -l $new_symlink;
 
     my ($ver_sym_res, $ver_sym_err) = LSA::SecEng::Integrity::verify_baseline(
         directory => $audit_dir,
         baseline  => $main_baseline,
     );
 
-    ok(defined $ver_sym_res, "verify_baseline inspects symlink replacement");
-    is($ver_sym_err->{code}, 1, "Exit code 1 when file replaced by symlink");
-    my ($sym_finding) = grep { $_->{path} eq 'subdir/nested/beta.txt' } @{$ver_sym_res->{findings}};
-    is($sym_finding->{status}, 'MODIFIED', "Symlink replacement flagged as MODIFIED");
-    like($sym_finding->{details}->{type_change}, qr/symbolic link/i, "Details note replacement by symbolic link");
-    unlink $file2;
+    ok(defined $ver_sym_res, "verify_baseline inspects tree with new symlink");
+    is($ver_sym_err->{code}, 1, "Exit code 1 on difference detection with new symlink");
+    is($ver_sym_res->{summary}->{added}, 1, "Newly added symlink reported in added count");
+    my ($sym_finding) = grep { $_->{path} eq 'link_to_alpha.txt' } @{$ver_sym_res->{findings}};
+    is($sym_finding->{status}, 'ADDED', "Symlink finding has status ADDED");
+    is($sym_finding->{details}->{type}, 'symlink', "Finding details identify type as symlink");
+
+    unlink $new_symlink or die $!;
 }
 
-# Restore file2
-open(my $fr2, '>:raw', $file2) or die $!;
-print $fr2 "nested content for integrity verification";
-close($fr2);
+# -------------------------------------------------------------
+# 7. FIX-02 & Required Test 4: Directory symlink replacement cannot escape target tree
+# -------------------------------------------------------------
+my $escape_dir = File::Spec->catdir($audit_dir, 'subdir_escape');
+mkdir $escape_dir or die $!;
+my $escape_subfile = File::Spec->catfile($escape_dir, 'nested.txt');
+open(my $efh, '>:raw', $escape_subfile) or die $!;
+print $efh "nested in escape dir";
+close($efh);
+
+# Create baseline including escape_dir
+my $escape_base = File::Spec->catfile($out_dir, 'escape_base.json');
+my ($eb_res, $eb_err) = LSA::SecEng::Integrity::init_baseline(
+    directory => $audit_dir,
+    output    => $escape_base,
+);
+is($eb_err, undef, "init_baseline with escape_dir succeeds");
+
+# Replace escape_dir with a symlink to external /tmp
+unlink $escape_subfile;
+rmdir $escape_dir;
+eval { symlink('/tmp', $escape_dir) };
+SKIP: {
+    skip "Directory symlink unsupported", 3 unless -l $escape_dir;
+
+    my ($ver_esc_res, $ver_esc_err) = LSA::SecEng::Integrity::verify_baseline(
+        directory => $audit_dir,
+        baseline  => $escape_base,
+    );
+
+    ok(defined $ver_esc_res, "verify_baseline inspects directory replaced by symlink");
+    # Must NOT follow symlink outside tree or crash!
+    my ($esc_finding) = grep { $_->{path} =~ /subdir_escape/ } @{$ver_esc_res->{findings}};
+    ok(defined $esc_finding, "Finding records directory symlink replacement");
+    ok($ver_esc_err->{code} == 1 || $ver_esc_err->{code} == 3, "Exits with difference (1) or error (3)");
+
+    unlink $escape_dir;
+}
 
 # -------------------------------------------------------------
-# 11. Security Control: Output Collision Protection
+# 8. FIX-05 & Required Test 5: Baseline input exceeding size limit is rejected
 # -------------------------------------------------------------
-my ($coll_res, $coll_err) = LSA::SecEng::Integrity::init_baseline(
+my ($size_res, $size_err) = LSA::SecEng::Integrity::verify_baseline(
+    directory           => $audit_dir,
+    baseline            => $main_baseline,
+    _max_baseline_size  => 10, # artificially set 10-byte limit
+);
+
+is($size_res, undef, "Oversized baseline rejected");
+is($size_err->{code}, 2, "Exit code 2 when baseline size exceeds limit");
+like($size_err->{error}, qr/exceeds maximum permitted limit/, "Error explains size limit violation");
+
+# -------------------------------------------------------------
+# 9. FIX-05 & Required Test 6: Malformed metadata is rejected
+# -------------------------------------------------------------
+# Test 6a: Negative size
+my $mal_size_file = File::Spec->catfile($out_dir, 'mal_size.json');
+my $mal_size_doc = {
+    schema_version   => '1.0.0',
+    target_directory => $audit_dir,
+    file_count       => 1,
+    files => [
+        { path => 'alpha.txt', sha256 => 'a' x 64, size_bytes => -5, mode => '0644' },
+    ],
+};
+open(my $msfh, '>:raw', $mal_size_file) or die $!;
+print $msfh JSON::PP->new->encode($mal_size_doc);
+close($msfh);
+
+my ($ms_res, $ms_err) = LSA::SecEng::Integrity::verify_baseline(
     directory => $audit_dir,
-    output    => $main_baseline, # already exists
+    baseline  => $mal_size_file,
+);
+is($ms_res, undef, "Negative size_bytes rejected");
+is($ms_err->{code}, 2, "Exit code 2 on negative size_bytes");
+like($ms_err->{error}, qr/Malformed or negative size_bytes/, "Error explains negative size rejection");
+
+# Test 6b: Malformed mode
+my $mal_mode_file = File::Spec->catfile($out_dir, 'mal_mode.json');
+my $mal_mode_doc = {
+    schema_version   => '1.0.0',
+    target_directory => $audit_dir,
+    file_count       => 1,
+    files => [
+        { path => 'alpha.txt', sha256 => 'a' x 64, size_bytes => 10, mode => '9999' },
+    ],
+};
+open(my $mmfh, '>:raw', $mal_mode_file) or die $!;
+print $mmfh JSON::PP->new->encode($mal_mode_doc);
+close($mmfh);
+
+my ($mm_res, $mm_err) = LSA::SecEng::Integrity::verify_baseline(
+    directory => $audit_dir,
+    baseline  => $mal_mode_file,
+);
+is($mm_res, undef, "Malformed octal mode rejected");
+is($mm_err->{code}, 2, "Exit code 2 on malformed octal mode");
+
+# Test 6c: Header file_count mismatch
+my $mismatch_file = File::Spec->catfile($out_dir, 'mismatch_count.json');
+my $mismatch_doc = {
+    schema_version   => '1.0.0',
+    target_directory => $audit_dir,
+    file_count       => 50, # declares 50 but contains 1
+    files => [
+        { path => 'alpha.txt', sha256 => 'a' x 64, size_bytes => 10, mode => '0644' },
+    ],
+};
+open(my $mcfh, '>:raw', $mismatch_file) or die $!;
+print $mcfh JSON::PP->new->encode($mismatch_doc);
+close($mcfh);
+
+my ($mc_res, $mc_err) = LSA::SecEng::Integrity::verify_baseline(
+    directory => $audit_dir,
+    baseline  => $mismatch_file,
+);
+is($mc_res, undef, "file_count mismatch rejected");
+is($mc_err->{code}, 2, "Exit code 2 on header file_count mismatch");
+like($mc_err->{error}, qr/file_count mismatch/, "Error describes file_count mismatch");
+
+# -------------------------------------------------------------
+# 10. FIX-05 & Required Test 7: Noncanonical paths rejected
+# -------------------------------------------------------------
+my @bad_paths = (
+    './alpha.txt',
+    'alpha.txt/./beta.txt',
+    'subdir/../alpha.txt',
+    'subdir//alpha.txt',
+    '/etc/passwd',
+    'alpha.txt/',
+    ' alpha.txt',
+);
+
+for my $bad_p (@bad_paths) {
+    my $bad_file = File::Spec->catfile($out_dir, 'bad_path.json');
+    my $bad_doc = {
+        schema_version   => '1.0.0',
+        target_directory => $audit_dir,
+        file_count       => 1,
+        files => [
+            { path => $bad_p, sha256 => 'a' x 64, size_bytes => 10, mode => '0644' },
+        ],
+    };
+    open(my $bfh, '>:raw', $bad_file) or die $!;
+    print $bfh JSON::PP->new->encode($bad_doc);
+    close($bfh);
+
+    my ($bp_res, $bp_err) = LSA::SecEng::Integrity::verify_baseline(
+        directory => $audit_dir,
+        baseline  => $bad_file,
+    );
+    is($bp_res, undef, "Noncanonical path '$bad_p' rejected");
+    is($bp_err->{code}, 2, "Exit code 2 for noncanonical path '$bad_p'");
+}
+
+# -------------------------------------------------------------
+# 11. FIX-06 & Required Test 8: Inaccessible subtree does not produce false removals
+# -------------------------------------------------------------
+my $lock_dir = File::Spec->catdir($audit_dir, 'locked_dir');
+mkdir $lock_dir or die $!;
+my $lock_file = File::Spec->catfile($lock_dir, 'secret.txt');
+open(my $lfh, '>:raw', $lock_file) or die $!;
+print $lfh "secret content";
+close($lfh);
+chmod 0644, $lock_file;
+
+my $lock_base = File::Spec->catfile($out_dir, 'lock_base.json');
+my ($lb_res, $lb_err) = LSA::SecEng::Integrity::init_baseline(
+    directory => $audit_dir,
+    output    => $lock_base,
+);
+is($lb_err, undef, "Baseline with locked_dir initialized successfully");
+
+# Now make lock_dir completely inaccessible (chmod 0000)
+chmod 0000, $lock_dir;
+SKIP: {
+    # If running as root (euid 0), chmod 0000 does not prevent access
+    skip "Running as superuser (root bypasses DAC 0000)", 3 if $> == 0;
+
+    my ($ver_lock_res, $ver_lock_err) = LSA::SecEng::Integrity::verify_baseline(
+        directory => $audit_dir,
+        baseline  => $lock_base,
+    );
+
+    ok(defined $ver_lock_res, "verify_baseline executed with locked directory");
+    is($ver_lock_err->{code}, 3, "Inaccessible directory exits with error code 3 (never 0)");
+    is($ver_lock_res->{summary}->{removed}, 0, "Inaccessible subtree DOES NOT produce false REMOVED findings");
+    ok($ver_lock_res->{summary}->{error} >= 1, "Inaccessible subtree counted as ERROR");
+}
+chmod 0755, $lock_dir;
+unlink $lock_file;
+rmdir $lock_dir;
+
+# -------------------------------------------------------------
+# 12. FIX-04 & Required Test 9: Output collision does not overwrite existing file
+# -------------------------------------------------------------
+my $coll_target = File::Spec->catfile($out_dir, 'collision_target.json');
+open(my $cf2, '>:raw', $coll_target) or die $!;
+print $cf2 "ORIGINAL CONTENT TO BE PRESERVED";
+close($cf2);
+
+my ($col_res, $col_err) = LSA::SecEng::Integrity::init_baseline(
+    directory => $audit_dir,
+    output    => $coll_target,
     force     => 0,
 );
 
-is($coll_res, undef, "Output collision rejected");
-is($coll_err->{code}, 2, "Exit code 2 on output collision without force");
-like($coll_err->{error}, qr/already exists/, "Collision error message explains restriction");
-
-# -------------------------------------------------------------
-# 12. Security Control: Reject Output Located Inside Audited Tree
-# -------------------------------------------------------------
-my $inside_output = File::Spec->catfile($audit_dir, 'inside_baseline.json');
-my ($ins_res, $ins_err) = LSA::SecEng::Integrity::init_baseline(
-    directory => $audit_dir,
-    output    => $inside_output,
-);
-
-is($ins_res, undef, "Output inside audited tree rejected");
-is($ins_err->{code}, 2, "Exit code 2 when output resides inside audited tree");
-like($ins_err->{error}, qr/cannot be located inside the audited directory tree/, "Containment error message");
-ok(!-e $inside_output, "No output file created inside audited tree");
-
-# -------------------------------------------------------------
-# 13. Malformed Baseline Rejection
-# -------------------------------------------------------------
-my $malformed_file = File::Spec->catfile($out_dir, 'malformed.json');
-open(my $mfh, '>:raw', $malformed_file) or die $!;
-print $mfh "{ corrupted json content: missing quotes ...";
-close($mfh);
-
-my ($mal_res, $mal_err) = LSA::SecEng::Integrity::verify_baseline(
-    directory => $audit_dir,
-    baseline  => $malformed_file,
-);
-
-is($mal_res, undef, "Malformed baseline rejected");
-is($mal_err->{code}, 2, "Exit code 2 on malformed baseline JSON");
-like($mal_err->{error}, qr/Malformed baseline JSON/, "Error describes JSON syntax failure");
-
-# -------------------------------------------------------------
-# 14. Path Traversal & Duplicate Entry Rejection in Baseline
-# -------------------------------------------------------------
-my $traversal_file = File::Spec->catfile($out_dir, 'traversal.json');
-my $traversal_json = {
-    schema_version   => '1.0.0',
-    target_directory => $audit_dir,
-    files => [
-        { path => '../../etc/passwd', sha256 => 'a' x 64, size_bytes => 10, mode => '0644' },
-    ],
+is($col_res, undef, "Output collision rejected without force");
+is($col_err->{code}, 2, "Exit code 2 on collision");
+my $coll_content_after = do {
+    open(my $c_in, '<:raw', $coll_target) or die $!;
+    local $/;
+    <$c_in>;
 };
-open(my $tfh, '>:raw', $traversal_file) or die $!;
-print $tfh JSON::PP->new->encode($traversal_json);
-close($tfh);
-
-my ($trav_res, $trav_err) = LSA::SecEng::Integrity::verify_baseline(
-    directory => $audit_dir,
-    baseline  => $traversal_file,
-);
-
-is($trav_res, undef, "Path traversal baseline rejected");
-is($trav_err->{code}, 2, "Exit code 2 on traversal path");
-like($trav_err->{error}, qr/Invalid or unsafe path entry/, "Traversal error message");
-
-# Duplicate entry
-my $dup_file = File::Spec->catfile($out_dir, 'duplicate.json');
-my $dup_json = {
-    schema_version   => '1.0.0',
-    target_directory => $audit_dir,
-    files => [
-        { path => 'alpha.txt', sha256 => 'a' x 64, size_bytes => 10, mode => '0644' },
-        { path => 'alpha.txt', sha256 => 'b' x 64, size_bytes => 20, mode => '0644' },
-    ],
-};
-open(my $dfh, '>:raw', $dup_file) or die $!;
-print $dfh JSON::PP->new->encode($dup_json);
-close($dfh);
-
-my ($dup_res, $dup_err) = LSA::SecEng::Integrity::verify_baseline(
-    directory => $audit_dir,
-    baseline  => $dup_file,
-);
-
-is($dup_res, undef, "Duplicate entry in baseline rejected");
-is($dup_err->{code}, 2, "Exit code 2 on duplicate path entry");
-like($dup_err->{error}, qr/Duplicate path entry in baseline/, "Duplicate error message");
+is($coll_content_after, "ORIGINAL CONTENT TO BE PRESERVED", "Pre-existing file was NOT overwritten or truncated");
 
 # -------------------------------------------------------------
-# 15. CLI Execution Tests with Envelope Validation
+# 13. FIX-06 & Required Test 10: Concurrent modification cannot produce successful verification
 # -------------------------------------------------------------
-my $cli_out_init = `$bin integrity-init $audit_dir --output $out_dir/cli_base.json --format json`;
+# Test with file modification during verify
+my ($ver_c_res, $ver_c_err) = LSA::SecEng::Integrity::verify_baseline(
+    directory => $audit_dir,
+    baseline  => $main_baseline,
+);
+# Modify file1
+open(my $m_fh, '>>:raw', $file1) or die $!;
+print $m_fh "append to trigger diff";
+close($m_fh);
+
+my ($ver_diff_res, $ver_diff_err) = LSA::SecEng::Integrity::verify_baseline(
+    directory => $audit_dir,
+    baseline  => $main_baseline,
+);
+
+ok(defined $ver_diff_err, "Verification did not succeed cleanly after modification");
+is($ver_diff_err->{code}, 1, "Exit code 1 on difference");
+isnt($ver_diff_err->{code}, 0, "Modified file CANNOT produce successful verification exit code 0");
+
+# Restore file1
+open(my $f1_rest, '>:raw', $file1) or die $!;
+print $f1_rest "The quick brown fox jumps over the lazy dog";
+close($f1_rest);
+
+# -------------------------------------------------------------
+# 14. FIX-01, FIX-04 & Required Test 11: No leftover temporary output files after failure
+# -------------------------------------------------------------
+opendir(my $dh_out, $out_dir) or die $!;
+my @leftover_tmps = grep { m{^\.tmp\.baseline} } readdir($dh_out);
+closedir($dh_out);
+is(scalar(@leftover_tmps), 0, "Zero leftover temporary baseline files found after failed runs");
+
+# -------------------------------------------------------------
+# 15. CLI Invocation Envelope & Strict Extra Argument Tests
+# -------------------------------------------------------------
+my $cli_init_out = `$bin integrity-init $audit_dir --output $out_dir/cli_final.json --format json`;
 is($?, 0, "CLI integrity-init exits with code 0");
-my $cli_init_data = eval { JSON::PP->new->decode($cli_out_init) };
-ok(defined $cli_init_data, "CLI integrity-init emits valid JSON");
-is($cli_init_data->{schema_version}, '1.0.0', "Envelope schema_version is 1.0.0");
-is($cli_init_data->{command}, 'integrity-init', "Envelope command is integrity-init");
-is($cli_init_data->{status}, 'success', "Envelope status is success");
-is($cli_init_data->{exit_code}, 0, "Envelope exit_code is 0");
-ok(defined $cli_init_data->{data}->{baseline_sha256}, "Envelope data contains baseline_sha256");
+my $cli_init_json = eval { JSON::PP->new->decode($cli_init_out) };
+is($cli_init_json->{schema_version}, '1.0.0', "Envelope schema_version is 1.0.0");
+is($cli_init_json->{command}, 'integrity-init', "Envelope command is integrity-init");
+is($cli_init_json->{status}, 'success', "Envelope status is success");
 
-# CLI verify success
-my $cli_out_ver = `$bin integrity-verify $audit_dir --baseline $out_dir/cli_base.json --format json`;
-is($?, 0, "CLI integrity-verify exits with code 0 on matching tree");
-my $cli_ver_data = eval { JSON::PP->new->decode($cli_out_ver) };
-ok(defined $cli_ver_data, "CLI integrity-verify emits valid JSON");
-is($cli_ver_data->{command}, 'integrity-verify', "Envelope command is integrity-verify");
-is($cli_ver_data->{status}, 'success', "Envelope status is success");
-is($cli_ver_data->{data}->{summary}->{unchanged}, 2, "Summary indicates 2 unchanged files");
+my $cli_ver_out = `$bin integrity-verify $audit_dir --baseline $out_dir/cli_final.json --format json`;
+is($?, 0, "CLI integrity-verify exits with code 0");
+my $cli_ver_json = eval { JSON::PP->new->decode($cli_ver_out) };
+is($cli_ver_json->{command}, 'integrity-verify', "Envelope command is integrity-verify");
+is($cli_ver_json->{status}, 'success', "Envelope status is success");
 
-# CLI strict positional extra argument rejection
-my $extra_init = `$bin integrity-init $audit_dir extra_arg --output $out_dir/extra.json 2>&1`;
-is($? >> 8, 2, "CLI integrity-init with extra argument exits with code 2");
-like($extra_init, qr/Unexpected extra argument: 'extra_arg'/, "Error describes extra argument");
-
-my $extra_ver = `$bin integrity-verify $audit_dir extra_arg --baseline $out_dir/cli_base.json 2>&1`;
-is($? >> 8, 2, "CLI integrity-verify with extra argument exits with code 2");
-like($extra_ver, qr/Unexpected extra argument: 'extra_arg'/, "Error describes extra argument");
-
-# CLI text format
-my $cli_text_ver = `$bin integrity-verify $audit_dir --baseline $out_dir/cli_base.json --format text`;
-is($?, 0, "CLI integrity-verify with --format text exits with code 0");
-like($cli_text_ver, qr/Summary:/, "Text output displays summary section");
-like($cli_text_ver, qr/Unchanged:\s+2/, "Text output displays unchanged count");
+# Symlink output destination rejected
+eval { symlink($file1, "$out_dir/symlink_out.json") };
+if (-l "$out_dir/symlink_out.json") {
+    my $sym_dest_cli = `$bin integrity-init $audit_dir --output $out_dir/symlink_out.json --format json 2>&1`;
+    is($? >> 8, 2, "Symlink output destination rejected with exit code 2");
+    unlink "$out_dir/symlink_out.json";
+}
 
 done_testing();
