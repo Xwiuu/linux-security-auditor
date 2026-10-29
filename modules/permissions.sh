@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+# Security Note:
+# Detecting symbolic links via [[ -L ]] inspects current filesystem state at check time,
+# but does not eliminate time-of-check to time-of-use (TOCTOU) races if an adversary
+# holds write access to parent directories. Kernel mechanisms (such as fs.protected_symlinks)
+# and descriptor-based operations are required for OS-enforced TOCTOU guarantees.
+# This module explicitly avoids following unexpected symbolic links at critical security paths.
+
 check_file_permissions() {
   local id="$1"
   local file="$2"
@@ -11,6 +18,23 @@ check_file_permissions() {
   local owner
   local group
 
+  # FIX-03: Detect symbolic links before existence/dereferencing checks
+  if [[ -L "$file" ]]; then
+    local target
+    target="$(readlink "$file" 2>/dev/null || printf '%s' 'unknown')"
+    finding \
+      id="$id" \
+      category=permissions \
+      severity=high \
+      title="$file is a symbolic link" \
+      description="The critical security file is a symbolic link, which can permit redirection or unauthorized tampering" \
+      expected="Regular file with mode=$expected_mode owner=$expected_owner group=$expected_group" \
+      actual="Symbolic link pointing to $target" \
+      recommendation="Replace the symbolic link with a regular file configured with appropriate permissions"
+
+    return 0
+  fi
+
   if [[ ! -e "$file" ]]; then
     finding \
       id="$id" \
@@ -21,6 +45,21 @@ check_file_permissions() {
       expected="File present with expected ownership and permissions" \
       actual="File not found" \
       recommendation="Review whether this file should exist on the system"
+
+    return 0
+  fi
+
+  # Unexpected non-regular special file (FIFO, socket, device)
+  if [[ ! -f "$file" && ! -d "$file" ]]; then
+    finding \
+      id="$id" \
+      category=permissions \
+      severity=high \
+      title="$file has unexpected file type" \
+      description="The audited path is neither a regular file nor a directory" \
+      expected="Regular file or directory with expected ownership and permissions" \
+      actual="Non-regular special file" \
+      recommendation="Review and replace the special file with the expected configuration"
 
     return 0
   fi
@@ -76,6 +115,23 @@ check_shadow_permissions() {
   local owner
   local group
 
+  # FIX-03: Critical security boundary check - shadow file must never be a symbolic link
+  if [[ -L "$file" ]]; then
+    local target
+    target="$(readlink "$file" 2>/dev/null || printf '%s' 'unknown')"
+    finding \
+      id="$id" \
+      category=permissions \
+      severity=critical \
+      title="$file is a symbolic link" \
+      description="The shadow database file is a symbolic link, presenting a critical security risk" \
+      expected="Regular file restricted to root (mode=000 or mode=640 root:shadow)" \
+      actual="Symbolic link pointing to $target" \
+      recommendation="Replace the symbolic link with a secure regular shadow file"
+
+    return 0
+  fi
+
   if [[ ! -e "$file" ]]; then
     finding \
       id="$id" \
@@ -86,6 +142,20 @@ check_shadow_permissions() {
       expected="Shadow database file present and restricted" \
       actual="File not found" \
       recommendation="Review whether this file should exist on the system"
+
+    return 0
+  fi
+
+  if [[ ! -f "$file" ]]; then
+    finding \
+      id="$id" \
+      category=permissions \
+      severity=critical \
+      title="$file is not a regular file" \
+      description="The shadow database file path is not a regular file" \
+      expected="Regular file restricted to root" \
+      actual="Non-regular file type" \
+      recommendation="Ensure the shadow file is a regular file"
 
     return 0
   fi
@@ -149,7 +219,24 @@ check_ssh_directory_permissions() {
   local home_dir="$1"
   local ssh_dir="$home_dir/.ssh"
 
-  if [[ ! -d "$ssh_dir" ]]; then
+  # FIX-03: Detect symbolic links for .ssh directory before traversal
+  if [[ -L "$ssh_dir" ]]; then
+    local target
+    target="$(readlink "$ssh_dir" 2>/dev/null || printf '%s' 'unknown')"
+    finding \
+      id=PERM-006 \
+      category=permissions \
+      severity=high \
+      title="$ssh_dir is a symbolic link" \
+      description="The .ssh configuration directory is a symbolic link, which can permit redirection to unauthorized keys" \
+      expected="Regular directory with mode=700" \
+      actual="Symbolic link pointing to $target" \
+      recommendation="Replace the symbolic link with a secure local directory"
+
+    return 0
+  fi
+
+  if [[ ! -e "$ssh_dir" ]]; then
     finding \
       id=PERM-006 \
       category=permissions \
@@ -159,6 +246,20 @@ check_ssh_directory_permissions() {
       expected="Secure .ssh permissions when the directory exists" \
       actual="$ssh_dir not found" \
       recommendation="No action required unless SSH keys are expected"
+
+    return 0
+  fi
+
+  if [[ ! -d "$ssh_dir" ]]; then
+    finding \
+      id=PERM-006 \
+      category=permissions \
+      severity=high \
+      title="$ssh_dir is not a directory" \
+      description="The .ssh path is not a directory" \
+      expected="Directory with mode=700" \
+      actual="Non-directory file present" \
+      recommendation="Ensure .ssh is a directory with mode 700"
 
     return 0
   fi
@@ -175,7 +276,24 @@ check_authorized_keys_permissions() {
   local home_dir="$1"
   local auth_file="$home_dir/.ssh/authorized_keys"
 
-  if [[ ! -f "$auth_file" ]]; then
+  # FIX-03: Detect symbolic links for authorized_keys before dereference
+  if [[ -L "$auth_file" ]]; then
+    local target
+    target="$(readlink "$auth_file" 2>/dev/null || printf '%s' 'unknown')"
+    finding \
+      id=PERM-007 \
+      category=permissions \
+      severity=high \
+      title="$auth_file is a symbolic link" \
+      description="The authorized_keys file is a symbolic link, which can permit unauthorized key injection" \
+      expected="Regular file with mode=600" \
+      actual="Symbolic link pointing to $target" \
+      recommendation="Replace the symbolic link with a regular file containing authorized public keys"
+
+    return 0
+  fi
+
+  if [[ ! -e "$auth_file" ]]; then
     finding \
       id=PERM-007 \
       category=permissions \
@@ -185,6 +303,20 @@ check_authorized_keys_permissions() {
       expected="Secure authorized_keys permissions when the file exists" \
       actual="$auth_file not found" \
       recommendation="No action required unless public-key authentication is expected"
+
+    return 0
+  fi
+
+  if [[ ! -f "$auth_file" ]]; then
+    finding \
+      id=PERM-007 \
+      category=permissions \
+      severity=high \
+      title="$auth_file is not a regular file" \
+      description="The authorized_keys path is not a regular file" \
+      expected="Regular file with mode=600" \
+      actual="Non-regular file type" \
+      recommendation="Ensure authorized_keys is a regular file with mode 600"
 
     return 0
   fi
