@@ -50,20 +50,62 @@ if [[ "$PREFIX" != /* ]]; then
   exit 1
 fi
 
+while [[ "$PREFIX" != "/" && "$PREFIX" == */ ]]; do
+  PREFIX="${PREFIX%/}"
+done
+
 BIN_DIR="$PREFIX/bin"
 LIB_DIR="$PREFIX/lib/linux-security-auditor"
-LINK="$BIN_DIR/lsa"
+LSA_LINK="$BIN_DIR/lsa"
+SEC_LINK="$BIN_DIR/sec-cli"
+LSA_TARGET="$LIB_DIR/lsa"
+SEC_TARGET="$LIB_DIR/sec-cli/bin/sec-cli"
 
-if [[ ! -d "$LIB_DIR" && ! -L "$LINK" ]]; then
+is_managed_link() {
+  local link="$1"
+  local expected_target="$2"
+  if [[ -L "$link" ]]; then
+    local target
+    target="$(readlink "$link" || true)"
+    if [[ "$target" == "$expected_target" ]]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+has_managed_install=0
+if [[ -d "$LIB_DIR" ]]; then
+  has_managed_install=1
+fi
+if is_managed_link "$LSA_LINK" "$LSA_TARGET"; then
+  has_managed_install=1
+fi
+if is_managed_link "$SEC_LINK" "$SEC_TARGET"; then
+  has_managed_install=1
+fi
+
+if ((has_managed_install == 0)); then
   printf 'Linux Security Auditor is not installed under %s\n' "$PREFIX"
   exit 0
 fi
 
-if [[ -L "$LINK" ]]; then
-  rm "$LINK"
-  printf 'Removed executable: %s\n' "$LINK"
-elif [[ -e "$LINK" ]]; then
-  printf 'Note: %s exists but is not a symlink; leaving it untouched\n' "$LINK"
+if is_managed_link "$LSA_LINK" "$LSA_TARGET"; then
+  rm -f "$LSA_LINK"
+  printf 'Removed executable: %s\n' "$LSA_LINK"
+elif [[ -L "$LSA_LINK" ]]; then
+  printf 'Note: %s is a symlink pointing elsewhere; leaving it untouched\n' "$LSA_LINK"
+elif [[ -e "$LSA_LINK" ]]; then
+  printf 'Note: %s exists but is not a symlink; leaving it untouched\n' "$LSA_LINK"
+fi
+
+if is_managed_link "$SEC_LINK" "$SEC_TARGET"; then
+  rm -f "$SEC_LINK"
+  printf 'Removed executable: %s\n' "$SEC_LINK"
+elif [[ -L "$SEC_LINK" ]]; then
+  printf 'Note: %s is a symlink pointing elsewhere; leaving it untouched\n' "$SEC_LINK"
+elif [[ -e "$SEC_LINK" ]]; then
+  printf 'Note: %s exists but is not a symlink; leaving it untouched\n' "$SEC_LINK"
 fi
 
 if [[ -d "$LIB_DIR" ]]; then
