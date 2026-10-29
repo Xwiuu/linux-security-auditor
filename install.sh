@@ -63,6 +63,19 @@ SEC_LINK="$BIN_DIR/sec-cli"
 LSA_TARGET="$LIB_DIR/lsa"
 SEC_TARGET="$LIB_DIR/sec-cli/bin/sec-cli"
 
+is_managed_lib_dir() {
+  local dir="$1"
+  local marker="$dir/.lsa-managed"
+  if [[ -d "$dir" && ! -L "$dir" && -f "$marker" ]]; then
+    local content
+    content="$(cat "$marker" 2>/dev/null || true)"
+    if [[ "$content" == "linux-security-auditor" ]]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 if [[ ! -f "$ROOT_DIR/lsa" ]]; then
   printf '%s\n' 'Error: lsa entrypoint not found' >&2
   exit 1
@@ -101,6 +114,14 @@ elif [[ -e "$SEC_LINK" ]]; then
   exit 1
 fi
 
+# Verify existing installation directory is managed if present
+if [[ -e "$LIB_DIR" || -L "$LIB_DIR" ]]; then
+  if ! is_managed_lib_dir "$LIB_DIR"; then
+    printf 'Error: %s already exists and is not managed by Linux Security Auditor\n' "$LIB_DIR" >&2
+    exit 1
+  fi
+fi
+
 if ! mkdir -p "$BIN_DIR" "$LIB_DIR/sec-cli/bin" "$LIB_DIR/sec-cli/lib"; then
   printf 'Error: could not create directories under %s\n' "$PREFIX" >&2
   exit 1
@@ -119,6 +140,9 @@ cp -r "$ROOT_DIR/sec-cli/lib/LSA" "$LIB_DIR/sec-cli/lib/"
 
 chmod +x "$LIB_DIR/lsa"
 chmod +x "$LIB_DIR/sec-cli/bin/sec-cli"
+
+printf '%s\n' 'linux-security-auditor' >"$LIB_DIR/.lsa-managed"
+chmod 644 "$LIB_DIR/.lsa-managed"
 
 ln -sfn "$LSA_TARGET" "$LSA_LINK"
 ln -sfn "$SEC_TARGET" "$SEC_LINK"

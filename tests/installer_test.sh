@@ -79,8 +79,11 @@ done
 [[ ! -e "$prefix/lib/linux-security-auditor/sec-cli/t" ]] ||
   fail "sec-cli tests should not be installed"
 
-[[ ! -e "$prefix/lib/linux-security-auditor/.github" ]] ||
-  fail "GitHub metadata should not be installed"
+[[ -f "$prefix/lib/linux-security-auditor/.lsa-managed" ]] ||
+  fail "missing .lsa-managed marker file in installed library directory"
+
+[[ "$(<"$prefix/lib/linux-security-auditor/.lsa-managed")" == "linux-security-auditor" ]] ||
+  fail "invalid content in .lsa-managed marker file"
 
 # Scenario 6: Installed sec-cli hash works on a temporary regular file
 test_hash_file="$tmp_dir/sample_hash.txt"
@@ -247,12 +250,63 @@ fi
   fail "unrelated symlink bin/sec-cli was altered by failed install"
 
 # Scenario 15: Partial installation and ownership-conflict behavior is tested
-# Test conflict with unrelated lsa file
-touch "$conflict_prefix/bin/lsa"
-if "$INSTALLER" --prefix "$conflict_prefix" >/dev/null 2>&1; then
-  fail "installer overwrote an unrelated regular file at bin/lsa"
+# Test unmanaged pre-existing lib directory protection (Fix 05A)
+unmanaged_lib_prefix="$tmp_dir/unmanaged_lib_prefix"
+mkdir -p "$unmanaged_lib_prefix/lib/linux-security-auditor"
+printf 'precious unmanaged data\n' >"$unmanaged_lib_prefix/lib/linux-security-auditor/precious.txt"
+
+# Installer must refuse to overwrite an unmanaged directory
+if "$INSTALLER" --prefix "$unmanaged_lib_prefix" >/dev/null 2>&1; then
+  fail "installer overwrote an unmanaged lib/linux-security-auditor directory"
 fi
-rm -f "$conflict_prefix/bin/lsa"
+
+[[ -f "$unmanaged_lib_prefix/lib/linux-security-auditor/precious.txt" ]] ||
+  fail "unmanaged directory content was altered or deleted by installer"
+
+[[ ! -e "$unmanaged_lib_prefix/lib/linux-security-auditor/lsa" ]] ||
+  fail "installer wrote files into unmanaged directory"
+
+# Uninstaller must refuse to delete an unmanaged directory
+"$UNINSTALLER" --prefix "$unmanaged_lib_prefix" >/dev/null 2>&1 || true
+
+[[ -d "$unmanaged_lib_prefix/lib/linux-security-auditor" ]] ||
+  fail "uninstaller deleted unmanaged lib/linux-security-auditor directory"
+
+[[ -f "$unmanaged_lib_prefix/lib/linux-security-auditor/precious.txt" ]] ||
+  fail "uninstaller deleted content inside unmanaged directory"
+
+# Unmanaged directory as a symlink
+symlink_lib_prefix="$tmp_dir/symlink_lib_prefix"
+symlink_target_dir="$tmp_dir/symlink_target_dir"
+mkdir -p "$symlink_lib_prefix/lib" "$symlink_target_dir"
+printf 'target data\n' >"$symlink_target_dir/target.txt"
+ln -s "$symlink_target_dir" "$symlink_lib_prefix/lib/linux-security-auditor"
+
+if "$INSTALLER" --prefix "$symlink_lib_prefix" >/dev/null 2>&1; then
+  fail "installer accepted unmanaged symlink as lib directory"
+fi
+
+"$UNINSTALLER" --prefix "$symlink_lib_prefix" >/dev/null 2>&1 || true
+
+[[ -L "$symlink_lib_prefix/lib/linux-security-auditor" ]] ||
+  fail "uninstaller removed unmanaged lib directory symlink"
+
+[[ -f "$symlink_target_dir/target.txt" ]] ||
+  fail "uninstaller deleted target of unmanaged lib directory symlink"
+
+# Uninstaller with managed binary link but unmanaged lib directory
+partial_prefix="$tmp_dir/partial_prefix"
+mkdir -p "$partial_prefix/bin" "$partial_prefix/lib/linux-security-auditor"
+printf 'unmanaged\n' >"$partial_prefix/lib/linux-security-auditor/important.txt"
+ln -s "$partial_prefix/lib/linux-security-auditor/lsa" "$partial_prefix/bin/lsa"
+
+"$UNINSTALLER" --prefix "$partial_prefix" >/dev/null 2>&1 || true
+
+[[ ! -e "$partial_prefix/bin/lsa" ]] ||
+  fail "uninstaller failed to remove managed binary link"
+
+[[ -f "$partial_prefix/lib/linux-security-auditor/important.txt" ]] ||
+  fail "uninstaller removed unmanaged lib directory when binary link was present"
 
 # Test uninstaller preserving unrelated symlink or file
 "$UNINSTALLER" --prefix "$conflict_prefix" >/dev/null 2>&1 || true

@@ -74,8 +74,21 @@ is_managed_link() {
   return 1
 }
 
+is_managed_lib_dir() {
+  local dir="$1"
+  local marker="$dir/.lsa-managed"
+  if [[ -d "$dir" && ! -L "$dir" && -f "$marker" ]]; then
+    local content
+    content="$(cat "$marker" 2>/dev/null || true)"
+    if [[ "$content" == "linux-security-auditor" ]]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 has_managed_install=0
-if [[ -d "$LIB_DIR" ]]; then
+if is_managed_lib_dir "$LIB_DIR"; then
   has_managed_install=1
 fi
 if is_managed_link "$LSA_LINK" "$LSA_TARGET"; then
@@ -108,9 +121,11 @@ elif [[ -e "$SEC_LINK" ]]; then
   printf 'Note: %s exists but is not a symlink; leaving it untouched\n' "$SEC_LINK"
 fi
 
-if [[ -d "$LIB_DIR" ]]; then
+if is_managed_lib_dir "$LIB_DIR"; then
   rm -rf "$LIB_DIR"
   printf 'Removed: %s\n' "$LIB_DIR"
+elif [[ -e "$LIB_DIR" || -L "$LIB_DIR" ]]; then
+  printf 'Note: %s is not managed by Linux Security Auditor; leaving it untouched\n' "$LIB_DIR"
 fi
 
 printf 'Uninstalled Linux Security Auditor from %s\n' "$PREFIX"
