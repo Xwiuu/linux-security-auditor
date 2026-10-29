@@ -1,37 +1,47 @@
 # Linux Security Auditor
 
-Linux Security Auditor (LSA) is a read-only Bash security auditing tool for Linux systems.
+Linux Security Auditor (LSA) is a read-only security auditing and diagnostics distribution for Linux systems.
 
-It inspects common security-sensitive configuration areas and produces structured findings without modifying the host.
+The distribution provides two complementary, standalone command-line tools:
+- **`lsa`**: Read-only Bash security auditor inspecting 40 host security configuration areas with CLI, TUI, and multi-format reporting.
+- **`sec-cli`**: Perl Security Engineering CLI providing point-in-time network diagnostics, cryptographic file hashing, structured event logging, file integrity baselines, and `/proc` host telemetry.
+
+`lsa` and `sec-cli` are distributed together and installed into the same prefix, but operate as independent commands.
+
+---
 
 ## Highlights
 
-- 40 structured audit findings
-- User and privilege auditing
-- Sudo configuration checks
-- Critical file permissions
-- SSH hardening checks
-- Ports and service exposure
-- Firewall analysis
-- Root process inspection
-- Package and security updates
-- Authentication log parsing
-- Text, JSON and CSV output
-- Interactive terminal interface
-- Installer/uninstaller
-- Automated quality gate and CI
+- **40 Structured Audit Findings (`lsa`)**: User privileges, sudo rules, critical file permissions, SSH daemon configuration, exposed listening ports, firewall filtering, root processes, pending security updates, and systemd/auth journal events.
+- **Security Engineering Diagnostics (`sec-cli`)**: DNS resolution, TCP reachability, SHA-256 file hashing, structured JSON logging, file integrity monitoring, and host resource telemetry.
+- **Strictly Read-Only Design**: Neither tool modifies system files, alters permissions, touches firewall rules, enables services, or remediates findings.
+- **Unified Output Formats**: Text, JSON, and CSV for `lsa`; structured JSON envelopes and human-readable text for `sec-cli`.
+- **Interactive Terminal Interface**: Menu-driven TUI (`lsa tui`) for interactive audits and reporting.
+- **Zero External Dependencies**: Core Bash and standard Perl core modules only; no CPAN packages, no Cargo/Rust, and no external daemons required.
+- **Safe Packaging & Lifecycle**: Managed installer and idempotent uninstaller supporting custom installation prefixes without touching third-party files.
+
+---
 
 ## Requirements
 
-- Linux
-- Bash
-- Standard GNU/Linux utilities
-- ShellCheck 0.11.0 (development only)
-- shfmt 3.14.1 (development only)
+### Runtime Requirements
+- Linux operating system (kernel with `/proc` filesystem support recommended for telemetry)
+- Bash 4.0 or higher
+- Perl 5.10 or higher (standard core modules: `Cwd`, `Digest::SHA`, `File::Basename`, `File::Spec`, `Getopt::Long`, `IO::Socket::IP`, `JSON::PP`, `Time::HiRes`)
+- Standard GNU/Linux userland utilities (`coreutils`, `iproute2`, `grep`, `sed`, `awk`)
 
-Some audits require elevated privileges to access protected files or effective service configuration. When access is unavailable, LSA reports the check as non-auditable instead of treating it as a successful result.
+Some checks in `lsa` require elevated privileges (e.g. `/etc/shadow`, root crontabs). When read access is denied, LSA marks the check as non-auditable rather than reporting a false positive or treating it as passed.
+
+### Development Requirements
+- `ShellCheck` 0.11.0+
+- `shfmt` 3.14.0+
+- `prove` / `Test::More` (standard Perl test harness)
+
+---
 
 ## Installation
+
+Install both `lsa` and `sec-cli` using the provided installer:
 
 ```bash
 git clone https://github.com/Xwiuu/linux-security-auditor.git
@@ -39,36 +49,56 @@ cd linux-security-auditor
 ./install.sh --prefix "$HOME/.local"
 ```
 
-Make sure `$HOME/.local/bin` is in your `PATH`. The installer prints a note when it is not.
+The installer verifies prerequisites, installs application libraries into `$PREFIX/lib/linux-security-auditor`, and creates managed symlinks in `$PREFIX/bin`:
+- `$PREFIX/bin/lsa`
+- `$PREFIX/bin/sec-cli`
 
-## Usage
+Ensure `$PREFIX/bin` (e.g. `$HOME/.local/bin`) is included in your `PATH`:
 
 ```bash
-lsa --help
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The installer refuses to overwrite existing binaries or symlinks that point outside the managed LSA directory. Repeated installation is safe and idempotent.
+
+---
+
+## Usage: Bash Security Auditor (`lsa`)
+
+### Full Audit Execution
+
+```bash
+# Terminal human-readable text report
 lsa audit
+
+# Explicit formats
 lsa audit --format text
 lsa audit --format json
 lsa audit --format csv
+
+# Save structured report to a file
 lsa audit --format json --output reports/audit.json
 ```
 
-Individual audit modules:
+### Individual Audit Modules
+
+Run specific checks individually:
 
 ```bash
-lsa host
-lsa users
-lsa sudo
-lsa permissions
-lsa ssh
-lsa ports
-lsa firewall
-lsa processes
-lsa updates
-lsa journal
-lsa sshlog
+lsa host         # Hostname, OS release, kernel, architecture
+lsa users        # Passwords, root UID, duplicate IDs, dormant accounts
+lsa sudo         # NOPASSWD, wheel/sudo group membership
+lsa permissions  # Critical paths (/etc/passwd, shadow, sudoers, SUID/SGID)
+lsa ssh          # SSH daemon protocol, PermitRootLogin, PasswordAuthentication
+lsa ports        # Listening TCP/UDP network services
+lsa firewall     # iptables, nftables, ufw, firewalld inspection
+lsa processes    # Non-root processes, privileged daemons
+lsa updates      # DNF / APT pending security updates
+lsa journal      # Systemd journal anomalies
+lsa sshlog       # Authentication logs (/var/log/secure, /var/log/auth.log)
 ```
 
-## Terminal interface
+### Interactive Terminal Interface (TUI)
 
 ```bash
 lsa tui
@@ -87,67 +117,147 @@ Linux Security Auditor
 Select an option:
 ```
 
-## Uninstall
+---
+
+## Usage: Security Engineering CLI (`sec-cli`)
+
+`sec-cli` provides operational diagnostics and security verification subcommands. Output is formatted as structured JSON by default, or as text with `--format text`.
+
+### 1. DNS Resolution (`dns`)
+Resolves forward IPv4 (`A`) and IPv6 (`AAAA`) addresses for a given hostname with timing:
+
+```bash
+sec-cli dns localhost
+sec-cli dns google.com --format text --timeout 2
+```
+
+### 2. TCP Connectivity (`tcp-check`)
+Checks TCP connectivity and handshake latency against a target host and port:
+
+```bash
+sec-cli tcp-check 127.0.0.1 22 --timeout 3
+sec-cli tcp-check 192.168.1.1 443 --format text
+```
+
+### 3. File Hashing (`hash`)
+Computes cryptographic SHA-256 digests and validates file stability during read:
+
+```bash
+sec-cli hash /etc/passwd
+sec-cli hash /bin/bash --format text
+```
+
+### 4. Structured Event Logging (`log`)
+Emits standardized JSON log events with ISO 8601 timestamps and optional structured context:
+
+```bash
+sec-cli log "Auditing started" --level info
+sec-cli log "Unauthorized change detected" --level warn --context '{"target":"/etc/ssh"}'
+```
+
+### 5. Integrity Baseline Initialization (`integrity-init`)
+Generates an inventory baseline file containing SHA-256 digests, permissions, ownership, and symlink targets for a directory tree:
+
+```bash
+sec-cli integrity-init /etc --output /var/tmp/etc-baseline.json
+sec-cli integrity-init /etc --output /var/tmp/etc-baseline.json --force
+```
+
+### 6. Integrity Verification (`integrity-verify`)
+Compares current filesystem state against a previously generated baseline and reports unchanged, modified, added, removed, or error items:
+
+```bash
+sec-cli integrity-verify /etc --baseline /var/tmp/etc-baseline.json
+sec-cli integrity-verify /etc --baseline /var/tmp/etc-baseline.json --format text
+```
+
+### 7. Host Telemetry (`host-metrics`)
+Collects host telemetry directly from `/proc` (`/proc/meminfo`, `/proc/loadavg`, `/proc/self/mountinfo`) with zero subprocess forks:
+
+```bash
+sec-cli host-metrics
+sec-cli host-metrics --format text
+```
+
+Reports:
+- Memory: Total, available, free, swap total, and swap free (in KiB).
+- System load averages: 1-minute, 5-minute, and 15-minute averages.
+- Mount points: Target path, filesystem type, and kernel security mount flags (`nodev`, `nosuid`, `noexec`).
+
+---
+
+## Exit Codes
+
+### `lsa` Exit Codes
+- `0`: Successful execution (findings may be present in report output).
+- `1`: Invocation error, unknown option, or execution failure.
+
+### `sec-cli` Exit Codes
+- `0`: Successful operation / file integrity check passed with zero modifications.
+- `1`: Warning condition (e.g. file modified concurrently during hashing, or integrity drift detected during verification).
+- `2`: Invalid command-line arguments, unknown command, or syntax error.
+- `3`: Operational error (I/O failure, permission denied, connection refused, or resolution timeout).
+
+---
+
+## Security Model & Limitations
+
+- **Read-Only Scope**: The suite does not remediate findings, fix insecure permissions, alter firewall rules, or touch credentials.
+- **Permission Boundaries**: If a file or configuration item cannot be read due to DAC or MAC restrictions, the check is explicitly recorded as non-auditable rather than passed.
+- **Point-in-Time Verification**: `integrity-verify` performs on-demand comparisons against a stored snapshot. It is **not** a continuous file monitoring system, inotify daemon, or real-time intrusion prevention engine.
+- **Durability Notice**: Baseline generation applies atomic file writes and directory synchronization (`fsync`), but filesystem-level crash durability guarantees depend on underlying filesystem semantics, mount flags, and storage hardware.
+- **Telemetry Boundaries**: `host-metrics` reports kernel system load averages and memory figures. It does **not** measure CPU utilization percentages or process scheduling overhead.
+- **Decoupled Architecture**: `lsa` and `sec-cli` are installed together but execute independently. `lsa audit` does not automatically invoke `sec-cli`.
+
+---
+
+## Uninstallation
+
+To remove LSA from your system:
 
 ```bash
 ./uninstall.sh --prefix "$HOME/.local"
 ```
 
-The uninstaller removes only what the installer created and leaves the rest of the prefix untouched.
+The uninstaller removes only managed links (`$PREFIX/bin/lsa`, `$PREFIX/bin/sec-cli`) and the application directory (`$PREFIX/lib/linux-security-auditor`). Unrelated files in `$PREFIX/bin` or `$PREFIX` remain untouched. Uninstallation is idempotent.
 
-## Security model
+---
 
-LSA is read-only by design.
+## Local Development & Quality Gates
 
-It does not:
+Run the local quality gates before submitting changes:
 
-- modify configuration
-- enable services
-- change firewall rules
-- alter users or passwords
-- generate SSH host keys
+```bash
+# Run all Bash syntax checks, formatting checks, and test suites
+./scripts/check.sh </dev/null
 
-When a protected resource cannot be inspected, the check is reported as non-auditable instead of successful.
+# Run Perl test harness (syntax, network, hashing, integrity, metrics)
+prove -r sec-cli/t
+
+# Check for trailing whitespace or formatting diffs
+git diff --check
+```
+
+---
 
 ## Architecture
 
 ```text
-lsa                 entrypoint, CLI and audit orchestration
-lib/                finding engine, logger, shared helpers
-modules/            audit checks (users, sudo, ssh, ports, firewall, ...)
-parsers/            authentication journal and event parsing
-reporters/          text, JSON and CSV output
-tui/                interactive terminal interface
-scripts/check.sh    canonical quality gate
-install.sh          installer
-uninstall.sh        uninstaller
-tests/              automated test suites
+linux-security-auditor/
+├── lsa                      # Bash audit CLI entrypoint and orchestrator
+├── lib/                     # Finding engine, logger, and utility functions
+├── modules/                 # Bash audit modules (host, users, permissions, ssh, etc.)
+├── parsers/                 # Authentication and systemd journal log parsers
+├── reporters/               # Text, JSON, and CSV reporters
+├── tui/                     # Interactive terminal user interface
+├── sec-cli/
+│   ├── bin/
+│   │   └── sec-cli          # Perl Security Engineering CLI executable
+│   ├── lib/LSA/SecEng/      # Perl modules (DNS, TCP, Hash, Logger, Integrity, HostMetrics)
+│   └── t/                   # Perl unit and regression test suite
+├── scripts/
+│   └── check.sh             # Canonical Bash quality gate
+├── tests/                   # Bash unit, TUI, CLI, hardening, and installer tests
+├── install.sh               # Standalone installer
+└── uninstall.sh             # Standalone uninstaller
 ```
-
-Every check emits structured findings through a single engine, and reporters render the same data as text, JSON or CSV.
-
-## Quality gate
-
-```bash
-./scripts/check.sh
-```
-
-Runs:
-
-- bash syntax validation
-- shfmt
-- ShellCheck
-- findings tests
-- CLI tests
-- TUI tests
-- runtime hardening tests
-- structured audit tests
-- installer tests
-
-The same gate runs in GitHub Actions on every push and pull request.
-
-## Project status
-
-Current version: `1.0.0`.
-
-First stable release. Future work, if there is demand: migrating the remaining journal and sshlog checks to the structured finding engine, and packaging (RPM/DEB).
