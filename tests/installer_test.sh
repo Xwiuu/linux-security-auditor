@@ -294,6 +294,40 @@ fi
 [[ -f "$symlink_target_dir/target.txt" ]] ||
   fail "uninstaller deleted target of unmanaged lib directory symlink"
 
+# Unmanaged directory with symlinked .lsa-managed marker (Fix 05B)
+marker_symlink_prefix="$tmp_dir/marker_symlink_prefix"
+external_target="$tmp_dir/external_managed_target.txt"
+printf 'linux-security-auditor\n' >"$external_target"
+chmod 600 "$external_target"
+
+target_sha_before="$(sha256sum "$external_target" | awk '{print $1}')"
+
+mkdir -p "$marker_symlink_prefix/lib/linux-security-auditor"
+ln -s "$external_target" "$marker_symlink_prefix/lib/linux-security-auditor/.lsa-managed"
+
+if "$INSTALLER" --prefix "$marker_symlink_prefix" >/dev/null 2>&1; then
+  fail "installer accepted symlinked .lsa-managed marker"
+fi
+
+target_sha_after="$(sha256sum "$external_target" | awk '{print $1}')"
+[[ "$target_sha_before" == "$target_sha_after" ]] ||
+  fail "installer modified external target file content through marker symlink"
+
+target_perms="$(stat -c '%a' "$external_target")"
+[[ "$target_perms" == "600" ]] ||
+  fail "installer modified external target file permissions (expected 600, got $target_perms)"
+
+[[ -L "$marker_symlink_prefix/lib/linux-security-auditor/.lsa-managed" ]] ||
+  fail "marker symlink was removed or replaced by installer"
+
+"$UNINSTALLER" --prefix "$marker_symlink_prefix" >/dev/null 2>&1 || true
+
+[[ -d "$marker_symlink_prefix/lib/linux-security-auditor" ]] ||
+  fail "uninstaller deleted directory having symlinked .lsa-managed marker"
+
+[[ -f "$external_target" ]] ||
+  fail "uninstaller deleted external target of marker symlink"
+
 # Uninstaller with managed binary link but unmanaged lib directory
 partial_prefix="$tmp_dir/partial_prefix"
 mkdir -p "$partial_prefix/bin" "$partial_prefix/lib/linux-security-auditor"

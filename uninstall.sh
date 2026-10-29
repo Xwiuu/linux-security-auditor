@@ -77,7 +77,7 @@ is_managed_link() {
 is_managed_lib_dir() {
   local dir="$1"
   local marker="$dir/.lsa-managed"
-  if [[ -d "$dir" && ! -L "$dir" && -f "$marker" ]]; then
+  if [[ -d "$dir" && ! -L "$dir" && -f "$marker" && ! -L "$marker" ]]; then
     local content
     content="$(cat "$marker" 2>/dev/null || true)"
     if [[ "$content" == "linux-security-auditor" ]]; then
